@@ -1,5 +1,5 @@
 module.exports = {
-    'serverName:': 'odin-ns-manager-1',
+    'serverName:': 'freya-ns-api-1',
     'companyName': 'YourCompany',
 
     'secret'  : 'Test',
@@ -15,7 +15,7 @@ module.exports = {
     'modelServerPort': '27017',
     'modelServerUser': 'Test',
     'modelServerPwd': 'Test',
-    'modelServerDataBase': 'odin-ns-manager-1',
+    'modelServerDataBase': 'freya-ns-api-1',
 
     'logingEnabled': true,
     'basicLogFolder': 'services/logservice/logs',
