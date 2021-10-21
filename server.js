@@ -16,7 +16,7 @@ var morgan = require('morgan');
 
 
 var jwt = require('jsonwebtoken');
-var config = require('../src/config/config');
+var config = require('./config/config.js');
 app.set('superSecret', config.secret);
 
 app.use(bodyParser.urlencoded({ extended: false }));
@@ -26,16 +26,16 @@ app.use(morgan('dev'));
 
 // Service Module loading
 
-if(config.logingEnabled) var logService = require("../src/services/logService/logService");
-if(config.authEnabled) var authService = require("../src/services/authService/authService");
+if(config.logingEnabled) var logService = require("./services/logService/logService.js");
+if(config.authEnabled) var authService = require("./services/authService/authService.js");
 
 switch (config.modelServerType) {
     case 'MNG':
-        var modelService = require('../src/model/mongoDB/manager')
+        var modelService = require('./model/mongoDB/manager')
         break;
 
     default:
-        var modelService = require('../src/model/mongoDB/manager')
+        var modelService = require('./model/mongoDB/manager')
         break;
 }
 
@@ -49,7 +49,7 @@ router.get('/', function(req, res) {
 
 // Server START
 
-var server = require('../src/services/serverService/serverService');
+var server = require('./services/serverService/serverService');
 
 if(config.httpsEnabled){
     server.startHTTPSServer(app,config.httpsServerPort);
