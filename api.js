@@ -1,62 +1,47 @@
 /* Freya NS API v1.0.0 Server */
 
-// Basic Module loading
+const config = require('./config/config');
+const logService = require('./services/logService/logService');
+const serverService = require('./services/serverService/serverService');
+const userService = require('./services/userService/userService');
+const { createApp } = require('./app');
 
-const fs = require('fs');
-const https = require('https');
-const http = require('http');
-
-var express = require('express');
-var app = express();
-var bodyParser = require('body-parser');
-var morgan = require('morgan');
-
-var bodyParser = require('body-parser');
-var morgan = require('morgan');
-
-
-var jwt = require('jsonwebtoken');
-var config = require('./config/config.js');
-app.set('superSecret', config.secret);
-
-app.use(bodyParser.urlencoded({ extended: false }));
-app.use(bodyParser.json());
-
-app.use(morgan('dev'));
-
-// Service Module loading
-
-if(config.logingEnabled) var logService = require("./services/logService/logService.js");
-if(config.authEnabled) var authService = require("./services/authService/authService.js");
-
-switch (config.modelServerType) {
-    case 'MNG':
-        var modelService = require('./model/mongoDB/manager')
-        break;
-
-    default:
-        var modelService = require('./model/mongoDB/manager')
-        break;
-}
-
-//API
-var router = express.Router();
-app.use('/api', router);
-
-router.get('/', function(req, res) {
-    res.json({ message: 'Welcome to '+ config["serverName:"] + ' server by '+ config.companyName +'!' });
-});
-
-// Server START
-
-var server = require('./services/serverService/serverService');
-
-if(config.httpsEnabled){
-    server.startHTTPSServer(app,config.httpsServerPort);
-} else {
-    if(config.httpEnabled){
-        server.startHTTPServer(app,config.httpServerPort);
-    } else {
-        if(!config.httpsEnabled) server.startHTTPDefaultServer(app);
+function loadModelService() {
+    switch (config.modelServerType) {
+        case 'MNG':
+        default:
+            return require('./model/mongoDB/manager');
     }
 }
+
+async function main() {
+    if (config.type !== 'DEV' && config.secret === 'Test') {
+        throw new Error('Set FREYA_SECRET to a private value before running outside of DEV.');
+    }
+
+    const modelService = loadModelService();
+    await modelService.connectToDB();
+    await userService.ensureDefaultAdmin();
+
+    const server = await serverService.startServer(createApp());
+    logService.serverStartedLog();
+
+    let stopping = false;
+    const shutDown = async (signal) => {
+        if (stopping) return;
+        stopping = true;
+        logService.addInfoLogBasicInfoEntry('Server stopping - ', signal);
+        await serverService.stopServer(server);
+        await modelService.disconnectFromDB();
+        process.exit(0);
+    };
+    process.on('SIGINT', shutDown);
+    process.on('SIGTERM', shutDown);
+}
+
+main().catch((err) => {
+    console.error('Server failed to start:', err.message);
+    logService.addErrorLogErrorEntry('Server failed to start: ', err.stack || err);
+    // Give the file logger a moment to flush before exiting.
+    setTimeout(() => process.exit(1), 500);
+});

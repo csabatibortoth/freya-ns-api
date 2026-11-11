@@ -1,45 +1,63 @@
-var express = require('express');
-const https = require('https');
+const fs = require('fs');
 const http = require('http');
-var router = express.Router();
+const https = require('https');
+const path = require('path');
 
-var jwt = require('jsonwebtoken');
-var config = require('../../config/config');
+const config = require('../../config/config');
+const logService = require('../logService/logService');
 
-if(config.logingEnabled) var logService = require('../logService/logService');
+const ROOT = path.resolve(__dirname, '../..');
 
-function startHTTPServer(app,port){
-    var httpServer = http.createServer(app);
-    httpServer.listen(port);
-    console.log('Magic happens at http://localhost:' + port);
+function listen(server, port, scheme) {
+    return new Promise((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(port, () => {
+            server.off('error', reject);
+            console.log(`Magic happens at ${scheme}://localhost:${server.address().port}`);
+            resolve(server);
+        });
+    });
 }
 
-function startHTTPSServer(app,port){
-    var privateKey = fs.readFileSync('sslcert/server.key', 'utf8');
-    var certificate = fs.readFileSync('sslcert/server.crt', 'utf8');
-
-    var credentials = { key: privateKey, cert: certificate };
-
-    var httpsServer = https.createServer(credentials, app);
-    httpsServer.listen(port);
-    console.log('Magic happens at https://localhost:' + port);
+function startHTTPServer(app, port) {
+    return listen(http.createServer(app), port, 'http');
 }
 
-function startHTTPDefaultServer(app){
-    var killable = require('killable');
-    var httpServer = http.createServer(app);
-    httpServer.listen('8080');
-    console.log("Error! HTTP or HTTPS must be enabled in order to run!");
-    if(config.logingEnabled) logService.addErrorLogErrorEntry("Error! HTTP or HTTPS must be enabled in order to run!");
-    if(config.logingEnabled) logService.addInfoLogBasicInfoEntry("System Terminated from an Error, for further info check error log!");
-    setTimeout(shutDown, 3000);
-
+async function startHTTPSServer(app, port) {
+    const [key, cert] = await Promise.all([
+        fs.promises.readFile(path.resolve(ROOT, config.httpsKeyFile), 'utf8'),
+        fs.promises.readFile(path.resolve(ROOT, config.httpsCertFile), 'utf8'),
+    ]);
+    return listen(https.createServer({ key, cert }, app), port, 'https');
 }
 
-function shutDown(){
-    process.exit();
+// Neither HTTP nor HTTPS is enabled: there is nothing to serve, so report and stop.
+function startHTTPDefaultServer() {
+    const message = 'Error! HTTP or HTTPS must be enabled in order to run!';
+    console.error(message);
+    logService.addErrorLogErrorEntry(message);
+    logService.addInfoLogBasicInfoEntry('System Terminated from an Error, for further info check error log!');
+    throw new Error(message);
 }
 
-module.exports.startHTTPDefaultServer = startHTTPDefaultServer;
-module.exports.startHTTPServer = startHTTPServer;
-module.exports.startHTTPSServer = startHTTPSServer;
+function startServer(app) {
+    if (config.httpsEnabled) return startHTTPSServer(app, config.httpsServerPort);
+    if (config.httpEnabled) return startHTTPServer(app, config.httpServerPort);
+    return startHTTPDefaultServer();
+}
+
+// Stop accepting connections, let in-flight requests finish, drop idle keep-alive sockets.
+function stopServer(server) {
+    return new Promise((resolve) => {
+        server.close(() => resolve());
+        server.closeIdleConnections();
+    });
+}
+
+module.exports = {
+    startServer,
+    stopServer,
+    startHTTPDefaultServer,
+    startHTTPServer,
+    startHTTPSServer,
+};

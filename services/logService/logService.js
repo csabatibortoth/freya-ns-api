@@ -1,89 +1,60 @@
 const fs = require('fs');
-var express = require('express');
-var router = express.Router();
+const path = require('path');
+const util = require('util');
+const config = require('../../config/config');
 
-var jwt = require('jsonwebtoken');
-var config = require('../../config/config');
+const TARGETS = ['log', 'error', 'security'];
+const LEVELS = ['info', 'warn'];
 
-const opts = {
-    errorEventName: 'error',
-    logDirectory: config.basicLogFolder, // NOTE: folder must exist and be writable...
-    fileNamePattern: 'log-<DATE>.log',
-    dateFormat: 'YYYY.MM.DD',
-    timestampFormat: 'YYYY-MM-DD HH:mm:ss.SSS'
-};
-const erroropts = {
-    errorEventName: 'error',
-    logDirectory: config.basicLogFolder, // NOTE: folder must exist and be writable...
-    fileNamePattern: 'error-<DATE>.log',
-    dateFormat: 'YYYY.MM.DD',
-    timestampFormat: 'YYYY-MM-DD HH:mm:ss.SSS'
-};
-const securityopts = {
-    errorEventName: 'error',
-    logDirectory: config.basicLogFolder, // NOTE: folder must exist and be writable...
-    fileNamePattern: 'security-<DATE>.log',
-    dateFormat: 'YYYY.MM.DD',
-    timestampFormat: 'YYYY-MM-DD HH:mm:ss.SSS'
-};
+const noop = { info() {}, warn() {} };
+let loggers = TARGETS.map(() => noop);
 
-const log = require('simple-node-logger').createRollingFileLogger(opts);
-const errorlog = require('simple-node-logger').createRollingFileLogger(erroropts);
-const securitylog = require('simple-node-logger').createRollingFileLogger(securityopts);
+if (config.logingEnabled) {
+    const winston = require('winston');
+    const DailyRotateFile = require('winston-daily-rotate-file');
 
-var zipped = 'archive-' + Date.now() + '.zip'
+    const dirname = path.resolve(__dirname, '../..', config.basicLogFolder);
+    fs.mkdirSync(dirname, { recursive: true });
 
-serverStartedLog();
+    const format = winston.format.combine(
+        winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
+        winston.format.printf((entry) => `${entry.timestamp} ${entry.level.toUpperCase().padEnd(5)} ${entry.message}`)
+    );
 
-function addLogEntry(logTargetType,logType,logText){
-    if(logTargetType == 0) {
-        switch (logType) {
-            case 0:
-                log.info(logText)
-                break;
-            case 1:
-                log.warn(logText)
-                break;
-        }
-    }
+    // One file per target and day, e.g. security-2026.11.11.log
+    loggers = TARGETS.map((name) =>
+        winston.createLogger({
+            format,
+            transports: [new DailyRotateFile({ dirname, filename: `${name}-%DATE%.log`, datePattern: 'YYYY.MM.DD' })],
+        })
+    );
+}
 
-    if(logTargetType == 1) {
-        switch (logType) {
-            case 0:
-                errorlog.info(logText)
-                break;
-            case 1:
-                errorlog.warn(logText)
-                break;
-        }
-    }
+const toText = (part) => (typeof part === 'string' ? part : util.inspect(part));
 
-    if(logTargetType == 2) {
-        switch (logType) {
-            case 0:
-                securitylog.info(logText)
-                break;
-            case 1:
-                securitylog.warn(logText)
-                break;
-        }
+// logTargetType: 0 = log, 1 = error, 2 = security; logType: 0 = info, 1 = warn
+function addLogEntry(logTargetType, logType, ...logText) {
+    const logger = loggers[logTargetType];
+    const level = LEVELS[logType];
+    if (logger && level) logger[level](logText.map(toText).join(''));
+}
+
+const addInfoLogBasicInfoEntry = (...logText) => addLogEntry(0, 0, ...logText);
+const addErrorLogErrorEntry = (...logText) => addLogEntry(1, 1, ...logText);
+const addSecurityLogInfoEntry = (...logText) => addLogEntry(2, 0, ...logText);
+const addSecurityLogWarnEntry = (...logText) => addLogEntry(2, 1, ...logText);
+
+function serverStartedLog() {
+    for (let target = 0; target < TARGETS.length; target++) {
+        addLogEntry(target, 0, 'Server Started! - ', config.version);
     }
 }
 
-function serverStartedLog(){
-    addLogEntry(0,0,"Server Started! - ", config.version);
-    addLogEntry(1,0,"Server Started! - ", config.version);
-    addLogEntry(2,0,"Server Started! - ", config.version);
-}
-
-function addErrorLogErrorEntry(logText){
-    addLogEntry(1,1,logText);
-}
-
-function addInfoLogBasicInfoEntry(logText){
-    addLogEntry(0,0,logText);
-}
-
-module.exports.addLogEntry = addLogEntry;
-module.exports.addErrorLogErrorEntry = addErrorLogErrorEntry;
-module.exports.addInfoLogBasicInfoEntry = addInfoLogBasicInfoEntry;
+module.exports = {
+    addLogEntry,
+    addErrorLogErrorEntry,
+    addInfoLogBasicInfoEntry,
+    addSecurityLogInfoEntry,
+    addSecurityLogWarnEntry,
+    serverStartedLog,
+};
