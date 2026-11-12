@@ -1,19 +1,21 @@
 # freya-ns-api
 
-Management API for the Freya DNS server. It is the administrative side of the
-name server: the place where the people who run it are managed, and where the
-DNS entries it serves are managed.
+Management API for the Freya DNS server, version 2.2.0. It is the administrative
+side of the name server: the place where the people who run it are managed, and
+where the zones and records it serves are managed.
 
-| Area | Status |
-| --- | --- |
-| User management (accounts, roles, passwords) | Available |
-| Authentication (login, logout, token revocation) | Available |
-| DNS entry management (zones and records) | Available |
+- **Zones and records** - create, change and delete DNS zones and their A, AAAA,
+  CNAME, MX, NS, PTR, SRV and TXT records. The SOA record and its serial are
+  kept for you.
+- **Users** - accounts with an `admin` or `user` role, and passwords.
+- **Authentication** - login with a token, logout, and immediate revocation.
 
 The server is built on Express 5 and MongoDB (Mongoose 9). The zones and records
-are checked with the validators of
+are stored in MongoDB and checked with the validators of
 [njord-ns-server](https://github.com/csabatibortoth/njord-ns-server), so
-everything that is stored is something that name server can send.
+everything that is stored is something that name server can send. See
+[Serving the zones with njord-ns-server](#serving-the-zones-with-njord-ns-server)
+for the other half.
 
 ## Requirements
 
@@ -33,6 +35,25 @@ at `127.0.0.1:27017`.
 On the first start, when there are no users yet, an admin account named `admin`
 is created. Set `FREYA_ADMIN_PWD` beforehand to choose its password; otherwise a
 random password is printed once to the console. Sign in with it and change it.
+
+From there, three requests put a name on the air: log in, create a zone, and add
+a record to it.
+
+```
+curl -X POST http://localhost:45451/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"<password>"}'
+
+curl -X POST http://localhost:45451/api/zones \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"name":"example.com","soa":{"host":"ns1.example.com"}}'
+
+curl -X POST http://localhost:45451/api/zones/<zoneId>/records \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"name":"www","type":"A","data":{"target":"192.0.2.1"}}'
+```
+
+The first answer holds the `token`, the second the `id` of the zone.
 
 ## Configuration
 
@@ -69,12 +90,6 @@ send the token with every request as `Authorization: Bearer <token>`.
 | POST | `/auth/login` | anyone | `{ username, password }` returns a token. The username may also be the e-mail address |
 | GET | `/auth/me` | signed in | The current user |
 | POST | `/auth/logout` | signed in | Revokes every token of the current user |
-
-```
-curl -X POST http://localhost:45451/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"<password>"}'
-```
 
 ### Users
 
@@ -151,11 +166,8 @@ The `soa` object has the properties of the `SOARecord` of njord-ns-server:
 `new named.SOARecord(zone.soa.host, zone.soa)`.
 
 `GET /zones` accepts `page`, `limit`, `q` (text search in the name), `active`
-and `sort` (`name`, `active`, `ttl`, `createdAt`, `updatedAt`).
-
-```
-curl -X POST http://localhost:45451/api/zones   -H "Authorization: Bearer <token>" -H "Content-Type: application/json"   -d '{"name":"example.com","soa":{"host":"ns1.example.com"}}'
-```
+and `sort` (`name`, `active`, `ttl`, `createdAt`, `updatedAt`), with the same
+meaning as for `GET /users`.
 
 ### Records
 
@@ -192,8 +204,18 @@ The SOA record is not in this list: it is the `soa` of the zone.
 `q` (text search in the name and the target) and `sort` (`name`, `type`, `ttl`,
 `active`, `createdAt`, `updatedAt`).
 
+A record looks like this:
+
 ```
-curl -X POST http://localhost:45451/api/zones/<zoneId>/records   -H "Authorization: Bearer <token>" -H "Content-Type: application/json"   -d '{"name":"www","type":"A","data":{"target":"192.0.2.1"}}'
+{
+  "id": "6af57c22d39258fa75d366fc",
+  "zone": "6af57c22d39258fa75d366fa",
+  "name": "www.example.com",
+  "type": "A",
+  "ttl": null,
+  "data": { "target": "192.0.2.1" },
+  "active": true
+}
 ```
 
 Rules worth knowing:
@@ -220,6 +242,50 @@ Errors are returned with a matching HTTP status and this body:
 | 404 | No such path, user, zone or record |
 | 409 | The username, e-mail or zone name is already taken, the record already exists or conflicts with a CNAME, or the change would remove the last admin |
 
+## Serving the zones with njord-ns-server
+
+This API only manages the zones and records; answering DNS queries is the work
+of [njord-ns-server](https://github.com/csabatibortoth/njord-ns-server). That
+server keeps no records of its own, so it looks them up in the `zones` and
+`records` collections this API writes. The stored fields are the constructor
+arguments of its record classes:
+
+```javascript
+const named = require('njord-ns-server');
+const { connectToDB, Zone, Record } = require('./model/mongoDB/manager');
+
+const server = named.createServer();
+const build = {
+  MX: (data) => new named.MXRecord(data.exchange, data),
+  SRV: (data) => new named.SRVRecord(data.target, data.port, data),
+};
+const toRecord = ({ type, data }) =>
+  (build[type] ? build[type](data) : new named[`${type}Record`](data.target));
+
+server.on('query', async (query) => {
+  const name = query.name().toLowerCase();
+  if (query.type() === 'SOA') {
+    const zone = await Zone.findOne({ name, active: true }).lean();
+    if (zone) query.addAnswer(name, new named.SOARecord(zone.soa.host, zone.soa), zone.soa.ttl);
+  } else {
+    const records = await Record.find({ name, type: query.type(), active: true })
+      .populate('zone', 'ttl active')
+      .lean();
+    for (const record of records) {
+      if (record.zone.active) query.addAnswer(name, toRecord(record), record.ttl ?? record.zone.ttl);
+    }
+  }
+  server.send(query);
+});
+
+connectToDB().then(() => server.listen(9999, '127.0.0.1'));
+```
+
+This is the smallest server that works, not a complete one: wildcard names,
+following a CNAME, answers for names that do not exist and zone transfers are
+left to the server. The `active` flag of a zone or a record has no effect by
+itself either; it is the server that must skip what is inactive, as above.
+
 ## Logs
 
 When logging is enabled, three files are written per day to the log folder:
@@ -237,6 +303,26 @@ records are written to the general log, with the name of the user who made them.
 | `routes/` | HTTP endpoints |
 | `services/` | Authentication, users, zones and records, logging and server start-up |
 | `model/mongoDB/` | Database connection and data models |
+
+## Release notes
+
+### 2.2.0
+
+- Zones: `/api/zones`, with the SOA record of the zone and a serial that is
+  raised on every change.
+- Records: `/api/zones/:zoneId/records`, for A, AAAA, CNAME, MX, NS, PTR, SRV
+  and TXT records, validated with njord-ns-server 2.1.0.
+- `FREYA_DNS_WRITE_ROLES` chooses the roles that may change zones and records.
+- New dependency: `njord-ns-server`, installed from GitHub. Run `npm install`
+  after updating.
+
+Nothing changes for the existing endpoints, and no data has to be migrated: the
+two new collections and their indexes are created on the first start.
+
+### 2.0.0
+
+- All packages updated; rebuilt on Express 5 and Mongoose 9.
+- User management and token authentication.
 
 ## License
 
