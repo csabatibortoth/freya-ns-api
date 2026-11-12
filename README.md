@@ -2,15 +2,18 @@
 
 Management API for the Freya DNS server. It is the administrative side of the
 name server: the place where the people who run it are managed, and where the
-DNS entries it serves will be managed.
+DNS entries it serves are managed.
 
 | Area | Status |
 | --- | --- |
 | User management (accounts, roles, passwords) | Available |
 | Authentication (login, logout, token revocation) | Available |
-| DNS entry management (zones and records) | Planned |
+| DNS entry management (zones and records) | Available |
 
-The server is built on Express 5 and MongoDB (Mongoose 9).
+The server is built on Express 5 and MongoDB (Mongoose 9). The zones and records
+are checked with the validators of
+[njord-ns-server](https://github.com/csabatibortoth/njord-ns-server), so
+everything that is stored is something that name server can send.
 
 ## Requirements
 
@@ -50,6 +53,7 @@ environment variable, so secrets do not have to be stored in the file.
 | `FREYA_ADMIN_USER` / `FREYA_ADMIN_EMAIL` / `FREYA_ADMIN_PWD` | `admin` / `admin@localhost` / random | The admin account created on first start |
 | `FREYA_LOGGING_ENABLED` / `FREYA_LOG_FOLDER` | `true` / `services/logService/logs` | File logging |
 | `FREYA_AUTH_ENABLED` | `true` | Set to `false` to skip token checks. For local development only: every request is then treated as an admin |
+| `FREYA_DNS_WRITE_ROLES` | `admin` | Roles that may change zones and records, comma separated, e.g. `admin,user`. Every signed-in user may read them |
 | `FREYA_SERVER_NAME` / `FREYA_COMPANY_NAME` | `freya-ns-api-1` / `YourCompany` | Shown in the welcome message |
 
 ## API
@@ -101,10 +105,104 @@ Rules worth knowing:
 - Changing a password, logging out, deactivating or deleting a user invalidates
   that user's tokens immediately.
 
-### DNS entries
+### Zones
 
-Not available yet. Managing the zones and records served by the DNS server is
-the next part of this API.
+| Method | Path | Who | Purpose |
+| --- | --- | --- | --- |
+| GET | `/zones` | signed in | List zones |
+| POST | `/zones` | admin | Create a zone: `{ name, soa: { host, ... }, ttl?, active? }` |
+| GET | `/zones/:zoneId` | signed in | Read one zone |
+| PATCH | `/zones/:zoneId` | admin | Update `soa`, `ttl` or `active`. The fields of `soa` that are left out keep their value |
+| DELETE | `/zones/:zoneId` | admin | Delete a zone **and all of its records** |
+
+"admin" stands for the roles in `FREYA_DNS_WRITE_ROLES`.
+
+A zone looks like this:
+
+```
+{
+  "id": "6af57c22d39258fa75d366fa",
+  "name": "example.com",
+  "ttl": 3600,
+  "active": true,
+  "soa": {
+    "host": "ns1.example.com",
+    "admin": "hostmaster.example.com",
+    "serial": 2026111200,
+    "refresh": 3600,
+    "retry": 600,
+    "expire": 604800,
+    "ttl": 3600
+  }
+}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `name` | required | The domain of the zone. Cannot be changed afterwards |
+| `ttl` | `3600` | TTL, in seconds, of the records that do not set their own |
+| `active` | `true` | An inactive zone is kept, but is not meant to be served |
+| `soa.host` | required | Host name of the primary name server |
+| `soa.admin` | `hostmaster.<name>` | Mailbox of the administrator, written as a domain name. An e-mail address is converted |
+| `soa.serial` | today, as `YYYYMMDD00` | Raised automatically on every change to the zone or its records. May be set by hand |
+| `soa.refresh` / `soa.retry` / `soa.expire` / `soa.ttl` | `3600` / `600` / `604800` / `3600` | The timers of the SOA record, in seconds |
+
+The `soa` object has the properties of the `SOARecord` of njord-ns-server:
+`new named.SOARecord(zone.soa.host, zone.soa)`.
+
+`GET /zones` accepts `page`, `limit`, `q` (text search in the name), `active`
+and `sort` (`name`, `active`, `ttl`, `createdAt`, `updatedAt`).
+
+```
+curl -X POST http://localhost:45451/api/zones   -H "Authorization: Bearer <token>" -H "Content-Type: application/json"   -d '{"name":"example.com","soa":{"host":"ns1.example.com"}}'
+```
+
+### Records
+
+| Method | Path | Who | Purpose |
+| --- | --- | --- | --- |
+| GET | `/zones/:zoneId/records` | signed in | List the records of a zone |
+| POST | `/zones/:zoneId/records` | admin | Create a record: `{ name, type, data, ttl?, active? }` |
+| GET | `/zones/:zoneId/records/:recordId` | signed in | Read one record |
+| PATCH | `/zones/:zoneId/records/:recordId` | admin | Update `name`, `data`, `ttl` or `active`. The fields of `data` that are left out keep their value |
+| DELETE | `/zones/:zoneId/records/:recordId` | admin | Delete a record |
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `name` | required | The owner of the record: `@` for the zone itself, a name relative to the zone (`www`), or a fully qualified name (`www.example.com`). The first label may be `*`. Stored fully qualified |
+| `type` | required | One of the types below. Cannot be changed afterwards |
+| `data` | required | The value of the record; its fields depend on the type |
+| `ttl` | `null` | TTL in seconds; `null` means the TTL of the zone |
+| `active` | `true` | An inactive record is kept, but is not meant to be served |
+
+The fields of `data` are the properties of the record classes of njord-ns-server:
+
+| Type | `data` |
+| --- | --- |
+| `A` | `{ target }` - an IPv4 address |
+| `AAAA` | `{ target }` - an IPv6 address |
+| `CNAME`, `NS`, `PTR` | `{ target }` - a fully qualified host name |
+| `MX` | `{ exchange, priority? }` - host name of the mail server; `priority` defaults to 0 |
+| `SRV` | `{ target, port, priority?, weight? }` - `priority` defaults to 0, `weight` to 10 |
+| `TXT` | `{ target }` - the text |
+
+The SOA record is not in this list: it is the `soa` of the zone.
+
+`GET /zones/:zoneId/records` accepts `page`, `limit`, `type`, `name`, `active`,
+`q` (text search in the name and the target) and `sort` (`name`, `type`, `ttl`,
+`active`, `createdAt`, `updatedAt`).
+
+```
+curl -X POST http://localhost:45451/api/zones/<zoneId>/records   -H "Authorization: Bearer <token>" -H "Content-Type: application/json"   -d '{"name":"www","type":"A","data":{"target":"192.0.2.1"}}'
+```
+
+Rules worth knowing:
+
+- Host names in `data` must be fully qualified; they are not completed with the zone.
+- A name that has a CNAME record cannot have any other record, and the zone
+  itself cannot be a CNAME.
+- Two identical records (same name, type and data) cannot exist in a zone.
+- Every change to a record raises the serial of its zone.
 
 ### Errors
 
@@ -119,14 +217,15 @@ Errors are returned with a matching HTTP status and this body:
 | 400 | The request is malformed or a value is not valid |
 | 401 | Not signed in, wrong credentials, or the token is expired or revoked |
 | 403 | Signed in, but not allowed to do this |
-| 404 | No such path or user |
-| 409 | The username or e-mail is already taken, or the change would remove the last admin |
+| 404 | No such path, user, zone or record |
+| 409 | The username, e-mail or zone name is already taken, the record already exists or conflicts with a CNAME, or the change would remove the last admin |
 
 ## Logs
 
 When logging is enabled, three files are written per day to the log folder:
 `log-<date>.log` (general), `error-<date>.log` (failures) and
-`security-<date>.log` (logins and every change to a user).
+`security-<date>.log` (logins and every change to a user). Changes to zones and
+records are written to the general log, with the name of the user who made them.
 
 ## Project layout
 
@@ -136,7 +235,7 @@ When logging is enabled, three files are written per day to the log folder:
 | `app.js` | Express application, routes and error handling |
 | `config/` | Configuration |
 | `routes/` | HTTP endpoints |
-| `services/` | Authentication, users, logging and server start-up |
+| `services/` | Authentication, users, zones and records, logging and server start-up |
 | `model/mongoDB/` | Database connection and data models |
 
 ## License

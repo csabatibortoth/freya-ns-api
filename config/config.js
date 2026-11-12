@@ -35,6 +35,9 @@ module.exports = Object.freeze({
 
     authEnabled: bool(env.FREYA_AUTH_ENABLED, true),
 
+    // Roles that may change zones and records, comma separated. Every signed-in user may read them.
+    dnsWriteRoles: (env.FREYA_DNS_WRITE_ROLES || 'admin').split(',').map((role) => role.trim()).filter(Boolean),
+
     // Created on startup when the user collection is empty. Without a password
     // a random one is generated and printed once to the console.
     defaultAdminUser: env.FREYA_ADMIN_USER || 'admin',
