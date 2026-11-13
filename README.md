@@ -1,8 +1,9 @@
 # freya-ns-api
 
-Management API for the Freya DNS server, version 2.2.0. It is the administrative
-side of the name server: the place where the people who run it are managed, and
-where the zones and records it serves are managed.
+Management API for the Freya DNS server, version 2.3.0. It is the administrative
+side of the name server: the place where the people who run it are managed,
+where the zones and records it serves and the domains it blocks are managed, and
+where what it did can be looked up.
 
 - **Zones and records** - create, change and delete DNS zones and their A, AAAA,
   CNAME, MX, NS, PTR, SRV and TXT records. The SOA record and its serial are
@@ -599,7 +600,7 @@ The export looks like this:
 {
   "format": "freya-ns-api-export",
   "formatVersion": 1,
-  "version": "2.2.0",
+  "version": "2.3.0",
   "exportedAt": "2026-11-13T10:15:00.000Z",
   "data": {
     "zones": [{ "name": "example.com", "ttl": 3600, "active": true, "soa": { ... }, "records": [ ... ] }],
@@ -769,31 +770,47 @@ download that fails is written to the error log.
 
 ## Release notes
 
-### Unreleased
+### 2.3.0
+
+New in this release:
+
+- **Standalone records**: `/api/records`, for records that belong to no zone.
+- **Blocking**: `/api/blocking`, with block lists that are downloaded from a
+  URL and refreshed on a schedule, block and allow rules for single domains, a
+  switch for all blocking, and a check of a domain.
+- **Monitoring**: `/api/monitoring`, where the name server records the queries
+  it answered, and where the queries, the clients and the hourly metrics are
+  read.
+- **Export and import**: `/api/backup/export` and `/api/backup/import`, to
+  move the zones, records, blocking and users to another system.
+- **Swagger UI** at `/api/docs`, and the OpenAPI description at
+  `/api/docs/openapi.json`.
+
+Changed, and worth checking before updating:
 
 - Every endpoint requires signing in, except `POST /api/auth/login`.
   **`GET /api/` now needs a token as well**, and a path that does not exist
-  answers 401 instead of 404 to a request without one.
-- Standalone records: `/api/records`, for records that belong to no zone.
-- Blocking: `/api/blocking`, with block lists that are downloaded from a URL
-  and refreshed on a schedule, block and allow rules for single domains, a
-  switch for all blocking, and a check of a domain.
-- Swagger UI at `/api/docs`, and the OpenAPI description at
-  `/api/docs/openapi.json`.
+  answers 401 instead of 404 to a request without one. A health check that
+  calls `GET /api/` without a token has to be changed.
 - A CNAME record is now refused when its name has records anywhere, not only in
   the same zone.
-- Monitoring: `/api/monitoring`, where the name server records the queries it
-  answered, and where the queries, the clients and the hourly metrics are read.
-- Export and import: `/api/backup/export` and `/api/backup/import`, to move the
-  zones, records, blocking and users to another system.
-- New settings: `FREYA_BLOCKLIST_REFRESH_CRON`, `FREYA_BLOCKLIST_MAX_SIZE_MB`,
-  `FREYA_DOCS_ENABLED`, `FREYA_MONITORING_ROLES`,
-  `FREYA_QUERY_LOG_RETENTION_DAYS`, `FREYA_METRICS_RETENTION_DAYS` and
-  `FREYA_IMPORT_MAX_SIZE_MB`.
-- New dependency: `swagger-ui-express`. Run `npm install` after updating.
+- The `zone` of a record can be `null`: a name server that reads the `records`
+  collection must expect the standalone records. The example in
+  [Serving the zones with njord-ns-server](#serving-the-zones-with-njord-ns-server)
+  shows how.
 
-No data has to be migrated: the new collections and their indexes are created
-on the first start, and the existing records keep their zone.
+Updating:
+
+- Run `npm install`: `swagger-ui-express` is a new dependency.
+- No data has to be migrated. The new collections and their indexes are created
+  on the first start, and the existing records keep their zone.
+- New settings, all with a default: `FREYA_BLOCKLIST_REFRESH_CRON`,
+  `FREYA_BLOCKLIST_MAX_SIZE_MB`, `FREYA_DOCS_ENABLED`,
+  `FREYA_MONITORING_ROLES`, `FREYA_QUERY_LOG_RETENTION_DAYS`,
+  `FREYA_METRICS_RETENTION_DAYS` and `FREYA_IMPORT_MAX_SIZE_MB`.
+- The blocking and the monitoring store what the name server needs and
+  reports; njord-ns-server has to be taught to use them. See
+  [Blocking](#blocking) and [Monitoring](#monitoring).
 
 ### 2.2.0
 

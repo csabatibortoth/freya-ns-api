@@ -25,7 +25,7 @@ module.exports = Object.freeze({
     httpsEnabled: bool(env.FREYA_HTTPS_ENABLED, false),
     httpsKeyFile: env.FREYA_HTTPS_KEY || 'sslcert/server.key',
     httpsCertFile: env.FREYA_HTTPS_CERT || 'sslcert/server.crt',
-    version: '2.2.0',
+    version: '2.3.0',
     type: env.FREYA_TYPE || 'DEV',
 
     modelServerType: 'MNG',
