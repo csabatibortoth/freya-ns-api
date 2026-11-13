@@ -425,6 +425,44 @@ const schemas = {
             },
         },
     },
+    CertificateStatus: {
+        type: 'object',
+        properties: {
+            enabled: { type: 'boolean', description: 'Whether the API is served over HTTPS' },
+            source: { type: 'string', enum: ['letsencrypt', 'custom'], description: 'Where the certificate comes from' },
+            domains: {
+                type: 'array',
+                items: { type: 'string' },
+                description: "The names the certificate is requested for from Let's Encrypt. Empty for a custom certificate",
+            },
+            automaticRenewal: { type: 'boolean', description: 'Whether the server renews the certificate by itself' },
+            certificate: {
+                type: 'object',
+                nullable: true,
+                description: 'The certificate that is served. `null` when HTTPS is not enabled',
+                properties: {
+                    subject: { type: 'string', example: 'CN=dns.example.com' },
+                    issuer: { type: 'string', example: "C=US, O=Let's Encrypt, CN=E7" },
+                    altNames: { type: 'array', items: { type: 'string' }, description: 'The names and addresses the certificate is valid for' },
+                    validFrom: { type: 'string', format: 'date-time' },
+                    validTo: { type: 'string', format: 'date-time' },
+                    daysLeft: { type: 'integer', description: 'Negative when the certificate is expired' },
+                    serialNumber: { type: 'string' },
+                    fingerprint256: { type: 'string', description: 'The SHA-256 fingerprint' },
+                },
+            },
+            lastCheckAt: { type: 'string', format: 'date-time', nullable: true, description: 'When a renewal was last considered or tried' },
+            lastError: { type: 'string', nullable: true, description: 'Why the last renewal failed. `null` after one that succeeded' },
+        },
+    },
+    CertificateUpload: {
+        type: 'object',
+        required: ['certificate', 'privateKey'],
+        properties: {
+            certificate: { type: 'string', description: 'The certificate in PEM format, optionally followed by its chain' },
+            privateKey: { type: 'string', description: 'The private key of the certificate, in PEM format' },
+        },
+    },
     ImportReport: {
         type: 'object',
         properties: {
@@ -961,6 +999,43 @@ const paths = {
             responses: responses({ 200: ok('What was done', ref('ImportReport')) }, 400, 403),
         },
     },
+
+    '/certificate': {
+        get: {
+            tags: ['Certificate'],
+            summary: 'Read the certificate of the HTTPS listener',
+            description: 'Requires the `admin` role. The private key is never sent.',
+            responses: responses({ 200: ok('The source and the certificate', ref('CertificateStatus')) }, 403),
+        },
+        put: {
+            tags: ['Certificate'],
+            summary: 'Replace the custom certificate',
+            description:
+                'Requires the `admin` role, and `FREYA_HTTPS_CERT_SOURCE=custom`. The certificate and its key are checked, written to ' +
+                'the certificate files, and served to every new connection at once: no restart is needed. A certificate that is ' +
+                'expired, or a key that does not belong to it, is refused.',
+            requestBody: body(ref('CertificateUpload')),
+            responses: {
+                ...responses({ 200: ok('The certificate that is served now', ref('CertificateStatus')) }, 400, 403),
+                409: error("HTTPS is not enabled, or the certificate comes from Let's Encrypt"),
+            },
+        },
+    },
+    '/certificate/renew': {
+        post: {
+            tags: ['Certificate'],
+            summary: 'Renew the certificate now',
+            description:
+                "Requires the `admin` role. With Let's Encrypt a new certificate is requested, whether or not the current one is " +
+                'due; mind the limits of the certificate authority. With a custom certificate the files are read again. ' +
+                'The answer comes when it is done, which can take a minute.',
+            responses: {
+                ...responses({ 200: ok('The certificate that is served now', ref('CertificateStatus')) }, 403),
+                409: error('HTTPS is not enabled, or the custom files cannot be used'),
+                502: error('The certificate authority did not issue a certificate'),
+            },
+        },
+    },
 };
 
 module.exports = {
@@ -985,6 +1060,7 @@ module.exports = {
         { name: 'Block rules', description: 'Domains blocked or allowed by hand; they win over the block lists' },
         { name: 'Monitoring', description: 'The queries the name server answered, its clients, and its metrics' },
         { name: 'Export and import', description: 'Moving the configuration to another system' },
+        { name: 'Certificate', description: "The certificate of HTTPS: from Let's Encrypt, or a custom one" },
     ],
     // Applies to every operation that does not say otherwise.
     security: [{ bearerAuth: [] }],

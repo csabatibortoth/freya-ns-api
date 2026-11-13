@@ -6,6 +6,7 @@ const serverService = require('./services/serverService/serverService');
 const userService = require('./services/userService/userService');
 const blockListService = require('./services/blockingService/blockListService');
 const monitoringService = require('./services/monitoringService/monitoringService');
+const certificateService = require('./services/certificateService/certificateService');
 const { createApp } = require('./app');
 
 function loadModelService() {
@@ -26,7 +27,11 @@ async function main() {
     await userService.ensureDefaultAdmin();
 
     const server = await serverService.startServer(createApp());
-    const schedules = [blockListService.startSchedule(), monitoringService.startSchedule()].filter(Boolean);
+    const schedules = [
+        blockListService.startSchedule(),
+        monitoringService.startSchedule(),
+        certificateService.startSchedule(),
+    ].filter(Boolean);
     logService.serverStartedLog();
 
     let stopping = false;

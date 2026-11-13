@@ -18,6 +18,7 @@
   },
   "homepage": "https://github.com/csabatibortoth/freya-ns-api",
   "dependencies": {
+    "acme-client": "^5.4.0",
     "bestzip": "^4.0.3",
     "body-parser": "^2.4.0",
     "ejs": "^7.0.2",
