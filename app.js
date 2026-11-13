@@ -7,13 +7,18 @@ const { authenticate } = require('./services/authService/authService');
 const HttpError = require('./services/httpError');
 const logService = require('./services/logService/logService');
 
+// These take a body that is larger than the limit of the rest, and read it in their own route:
+// after the token and the role are checked, so that nobody else can make the server parse it.
+const READS_OWN_BODY = new Set(['/api/backup/import', '/api/monitoring/queries']);
+
 function createApp() {
     const app = express();
     app.disable('x-powered-by');
 
     app.use(helmet());
     app.use(morgan(config.type === 'DEV' ? 'dev' : 'combined'));
-    app.use(express.json({ limit: '100kb' }));
+    const parseJson = express.json({ limit: '100kb' });
+    app.use((req, res, next) => (READS_OWN_BODY.has(req.path.toLowerCase().replace(/\/$/, '')) ? next() : parseJson(req, res, next)));
     app.use(express.urlencoded({ extended: false, limit: '100kb' }));
 
     const router = express.Router();
@@ -33,6 +38,8 @@ function createApp() {
     router.use('/zones', require('./routes/zoneRoutes'));
     router.use('/records', require('./routes/recordRoutes'));
     router.use('/blocking', require('./routes/blockingRoutes'));
+    router.use('/monitoring', require('./routes/monitoringRoutes'));
+    router.use('/backup', require('./routes/backupRoutes'));
     app.use('/api', router);
 
     app.use((req, res, next) => next(new HttpError(404, 'Not found')));

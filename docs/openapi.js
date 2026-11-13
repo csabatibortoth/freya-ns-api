@@ -310,6 +310,155 @@ const schemas = {
             },
         },
     },
+    QueryInput: {
+        type: 'object',
+        required: ['client', 'name', 'type'],
+        properties: {
+            time: { type: 'string', format: 'date-time', description: 'When the query was answered; now when left out' },
+            client: { type: 'string', description: 'The IPv4 or IPv6 address of the client', example: '192.168.1.5' },
+            name: { type: 'string', description: 'The name that was asked for', example: 'www.example.com' },
+            type: { type: 'string', description: 'The record type that was asked for', example: 'A' },
+            status: { type: 'string', default: 'NOERROR', description: 'The response code of the answer', example: 'NOERROR' },
+            blocked: { type: 'boolean', default: false, description: 'Whether the name was blocked' },
+            durationMs: { type: 'number', minimum: 0, nullable: true, description: 'How long the answer took' },
+        },
+    },
+    Query: {
+        type: 'object',
+        properties: {
+            id: ID,
+            time: { type: 'string', format: 'date-time' },
+            client: { type: 'string', example: '192.168.1.5' },
+            name: { type: 'string', example: 'www.example.com' },
+            type: { type: 'string', example: 'A' },
+            status: { type: 'string', example: 'NOERROR' },
+            blocked: { type: 'boolean' },
+            durationMs: { type: 'number', nullable: true },
+        },
+    },
+    Client: {
+        type: 'object',
+        properties: {
+            id: ID,
+            address: { type: 'string', example: '192.168.1.5' },
+            name: { type: 'string', description: 'Set by hand', example: 'Living room TV' },
+            firstSeenAt: { type: 'string', format: 'date-time' },
+            lastSeenAt: { type: 'string', format: 'date-time' },
+            queries: { type: 'integer', description: 'Counted since the client was first seen' },
+            blocked: { type: 'integer' },
+        },
+    },
+    Metrics: {
+        type: 'object',
+        properties: {
+            from: { type: 'string', format: 'date-time' },
+            to: { type: 'string', format: 'date-time' },
+            interval: { type: 'string', enum: ['hour', 'day'] },
+            totals: {
+                type: 'object',
+                properties: {
+                    queries: { type: 'integer' },
+                    blocked: { type: 'integer' },
+                    blockedPercent: { type: 'number' },
+                    averageDurationMs: { type: 'number', nullable: true },
+                    clients: { type: 'integer', description: 'The clients that were seen in the period' },
+                    statuses: { type: 'object', additionalProperties: { type: 'integer' }, example: { NOERROR: 120, NXDOMAIN: 4 } },
+                    types: { type: 'object', additionalProperties: { type: 'integer' }, example: { A: 90, AAAA: 34 } },
+                },
+            },
+            series: {
+                type: 'array',
+                description: 'One point for every hour or day of the period, also for those without queries',
+                items: {
+                    type: 'object',
+                    properties: {
+                        time: { type: 'string', format: 'date-time', description: 'The start of the hour or day, in UTC' },
+                        queries: { type: 'integer' },
+                        blocked: { type: 'integer' },
+                        averageDurationMs: { type: 'number', nullable: true },
+                    },
+                },
+            },
+        },
+    },
+    Top: {
+        type: 'object',
+        properties: {
+            from: { type: 'string', format: 'date-time' },
+            to: { type: 'string', format: 'date-time' },
+            domains: { type: 'array', items: ref('TopName'), description: 'The names that were answered the most' },
+            blockedDomains: { type: 'array', items: ref('TopName'), description: 'The names that were blocked the most' },
+            clients: {
+                type: 'array',
+                items: {
+                    type: 'object',
+                    properties: { address: { type: 'string' }, name: { type: 'string' }, count: { type: 'integer' } },
+                },
+            },
+        },
+    },
+    TopName: { type: 'object', properties: { name: { type: 'string' }, count: { type: 'integer' } } },
+    Export: {
+        type: 'object',
+        required: ['format', 'formatVersion', 'data'],
+        properties: {
+            format: { type: 'string', enum: ['freya-ns-api-export'] },
+            formatVersion: { type: 'integer', enum: [1] },
+            version: { type: 'string', description: 'The version of the system that made the export' },
+            exportedAt: { type: 'string', format: 'date-time' },
+            data: {
+                type: 'object',
+                description: 'The sections of the export. An import reads the sections that are there.',
+                properties: {
+                    zones: { type: 'array', description: 'The zones, each with its `records`', items: { type: 'object' } },
+                    records: { type: 'array', description: 'The standalone records', items: { type: 'object' } },
+                    blocking: {
+                        type: 'object',
+                        properties: {
+                            settings: ref('BlockSettings'),
+                            lists: { type: 'array', description: 'Without their domains: they are downloaded again', items: { type: 'object' } },
+                            rules: { type: 'array', items: { type: 'object' } },
+                        },
+                    },
+                    users: { type: 'array', description: 'With their password hashes', items: { type: 'object' } },
+                },
+            },
+        },
+    },
+    ImportReport: {
+        type: 'object',
+        properties: {
+            existing: { type: 'string', enum: ['skip', 'overwrite'] },
+            zones: ref('ImportCounts'),
+            records: ref('ImportCounts'),
+            blockSettings: { type: 'string', enum: ['updated', 'skipped', 'failed'] },
+            blockLists: ref('ImportCounts'),
+            blockRules: ref('ImportCounts'),
+            users: ref('ImportCounts'),
+            errors: {
+                type: 'array',
+                description: 'Why items failed; at most 100 are listed',
+                items: {
+                    type: 'object',
+                    properties: {
+                        section: { type: 'string' },
+                        item: { type: 'string', nullable: true },
+                        error: { type: 'string' },
+                        details: { type: 'object', additionalProperties: { type: 'string' } },
+                    },
+                },
+            },
+        },
+    },
+    ImportCounts: {
+        type: 'object',
+        properties: {
+            created: { type: 'integer' },
+            updated: { type: 'integer' },
+            skipped: { type: 'integer' },
+            failed: { type: 'integer' },
+        },
+    },
 };
 
 // ---- paths ------------------------------------------------------------------------------------------------
@@ -319,6 +468,13 @@ const ZONE_ID = pathParam('zoneId', 'The id of the zone');
 const RECORD_ID = pathParam('recordId', 'The id of the record');
 const LIST_ID = pathParam('listId', 'The id of the block list');
 const RULE_ID = pathParam('ruleId', 'The id of the block rule');
+const CLIENT_ID = pathParam('clientId', 'The id of the client');
+
+const MONITORS = `Requires one of the roles of the monitoring: \`${config.monitoringRoles.join('`, `')}\`.`;
+const RANGE = [
+    queryParam('from', { type: 'string', format: 'date-time' }, 'The start of the period; 24 hours before `to` when left out'),
+    queryParam('to', { type: 'string', format: 'date-time' }, 'The end of the period; now when left out'),
+];
 
 const RECORD_FILTERS = [
     ...PAGING,
@@ -654,6 +810,157 @@ const paths = {
             responses: responses({ 204: { description: 'Deleted' } }, 403, 404),
         },
     },
+
+    '/monitoring/metrics': {
+        get: {
+            tags: ['Monitoring'],
+            summary: 'The counters of a period, as totals and as a series over time',
+            description: `${MONITORS} Counted by the hour from the recorded queries, and kept longer than the queries themselves.`,
+            parameters: [
+                ...RANGE,
+                queryParam('interval', { type: 'string', enum: ['hour', 'day'], default: 'hour' }, 'The length of a point of the series; days are those of UTC'),
+            ],
+            responses: responses({ 200: ok('The metrics', ref('Metrics')) }, 400, 403),
+        },
+    },
+    '/monitoring/top': {
+        get: {
+            tags: ['Monitoring'],
+            summary: 'The most asked and most blocked names, and the busiest clients, of a period',
+            description: `${MONITORS} Counted from the stored queries, so it reaches back as far as they are kept.`,
+            parameters: [...RANGE, queryParam('limit', { type: 'integer', minimum: 1, maximum: 100, default: 10 }, 'The length of each list')],
+            responses: responses({ 200: ok('The lists', ref('Top')) }, 400, 403),
+        },
+    },
+    '/monitoring/queries': {
+        get: {
+            tags: ['Monitoring'],
+            summary: 'List the recorded queries',
+            description: MONITORS,
+            parameters: [
+                ...PAGING,
+                queryParam('client', { type: 'string' }, 'Only the queries of this address'),
+                queryParam('name', { type: 'string' }, 'Only the queries for this name'),
+                queryParam('q', { type: 'string' }, 'A part of the name'),
+                queryParam('type', { type: 'string' }, 'Only the queries of this record type'),
+                queryParam('status', { type: 'string' }, 'Only the queries with this response code'),
+                queryParam('blocked', { type: 'boolean' }, 'Only the blocked, or only the answered ones'),
+                queryParam('from', { type: 'string', format: 'date-time' }, 'Only the queries from this time on'),
+                queryParam('to', { type: 'string', format: 'date-time' }, 'Only the queries up to this time'),
+                sortParam(['time', 'client', 'name', 'type', 'status', 'durationMs'], '-time'),
+            ],
+            responses: responses({ 200: ok('A page of queries', page(ref('Query'))) }, 400, 403),
+        },
+        post: {
+            tags: ['Monitoring'],
+            summary: 'Record queries the name server answered',
+            description:
+                `${MONITORS} This is what the name server calls. The queries are stored, counted in the metrics of their hour, ` +
+                'and their clients are added to the list of clients. A batch with a query that is not valid is refused as a whole.',
+            requestBody: body({
+                type: 'object',
+                required: ['queries'],
+                properties: { queries: { type: 'array', minItems: 1, maxItems: 5000, items: ref('QueryInput') } },
+            }),
+            responses: responses(
+                {
+                    201: ok('The number of queries that were recorded', {
+                        type: 'object',
+                        properties: {
+                            accepted: { type: 'integer' },
+                            stored: { type: 'boolean', description: 'False when the queries are only counted, not kept' },
+                        },
+                    }),
+                },
+                400,
+                403
+            ),
+        },
+        delete: {
+            tags: ['Monitoring'],
+            summary: 'Delete the recorded queries',
+            description: `${MONITORS} The metrics and the clients stay.`,
+            parameters: [queryParam('before', { type: 'string', format: 'date-time' }, 'Only the queries before this time; all of them when left out')],
+            responses: responses(
+                { 200: ok('The number of queries that were deleted', { type: 'object', properties: { deleted: { type: 'integer' } } }) },
+                400,
+                403
+            ),
+        },
+    },
+    '/monitoring/clients': {
+        get: {
+            tags: ['Monitoring'],
+            summary: 'List the clients of the name server',
+            description: MONITORS,
+            parameters: [
+                ...PAGING,
+                search('the address and the name'),
+                sortParam(['address', 'name', 'firstSeenAt', 'lastSeenAt', 'queries', 'blocked'], '-lastSeenAt'),
+            ],
+            responses: responses({ 200: ok('A page of clients', page(ref('Client'))) }, 400, 403),
+        },
+    },
+    '/monitoring/clients/{clientId}': {
+        parameters: [CLIENT_ID],
+        get: {
+            tags: ['Monitoring'],
+            summary: 'Read one client',
+            description: MONITORS,
+            responses: responses({ 200: ok('The client', ref('Client')) }, 403, 404),
+        },
+        patch: {
+            tags: ['Monitoring'],
+            summary: 'Give a client a name',
+            description: MONITORS,
+            requestBody: body({ type: 'object', required: ['name'], properties: { name: { type: 'string', maxLength: 100 } } }),
+            responses: responses({ 200: ok('The updated client', ref('Client')) }, 400, 403, 404),
+        },
+        delete: {
+            tags: ['Monitoring'],
+            summary: 'Forget a client and its counters',
+            description: `${MONITORS} Its stored queries stay, and it is listed again when it sends another.`,
+            responses: responses({ 204: { description: 'Deleted' } }, 403, 404),
+        },
+    },
+
+    '/backup/export': {
+        get: {
+            tags: ['Export and import'],
+            summary: 'Export the configuration of the system as one JSON document',
+            description:
+                'Requires the `admin` role. The monitoring data is not exported. The domains of the block lists are not ' +
+                'either: the importing system downloads the lists itself.',
+            parameters: [
+                queryParam(
+                    'include',
+                    { type: 'string', default: 'zones,records,blocking', example: 'zones,records,blocking,users' },
+                    'The sections to export, comma separated: `zones` (with their records), `records` (the standalone ones), ' +
+                        '`blocking` and `users`. The users are exported with their password hashes, and only when asked for.'
+                ),
+            ],
+            responses: responses({ 200: ok('The export, sent as a file to save', ref('Export')) }, 400, 403),
+        },
+    },
+    '/backup/import': {
+        post: {
+            tags: ['Export and import'],
+            summary: 'Import an export',
+            description:
+                'Requires the `admin` role. What is not there yet is created. Nothing is ever deleted. The import is not ' +
+                'all-or-nothing: an item that is refused is counted as failed and listed in `errors`, and the others are imported. ' +
+                'The account that runs the import is never changed by it.',
+            parameters: [
+                queryParam(
+                    'existing',
+                    { type: 'string', enum: ['skip', 'overwrite'], default: 'skip' },
+                    'What happens to what is there already: it is kept as it is, or updated from the export'
+                ),
+            ],
+            requestBody: body(ref('Export')),
+            responses: responses({ 200: ok('What was done', ref('ImportReport')) }, 400, 403),
+        },
+    },
 };
 
 module.exports = {
@@ -662,7 +969,7 @@ module.exports = {
         title: 'Freya NS API',
         version: config.version,
         description:
-            'Management API of the Freya DNS server: users, zones, records, and the blocking of domains.\n\n' +
+            'Management API of the Freya DNS server: users, zones, records, the blocking of domains, monitoring, and export / import.\n\n' +
             'Every endpoint except `POST /auth/login` requires signing in. Log in, press **Authorize**, and paste the `token` of the answer.',
         license: { name: 'MIT' },
     },
@@ -676,6 +983,8 @@ module.exports = {
         { name: 'Blocking', description: 'The settings of the blocking, and the check of a domain' },
         { name: 'Block lists', description: 'Lists of domains to block, downloaded from a URL' },
         { name: 'Block rules', description: 'Domains blocked or allowed by hand; they win over the block lists' },
+        { name: 'Monitoring', description: 'The queries the name server answered, its clients, and its metrics' },
+        { name: 'Export and import', description: 'Moving the configuration to another system' },
     ],
     // Applies to every operation that does not say otherwise.
     security: [{ bearerAuth: [] }],

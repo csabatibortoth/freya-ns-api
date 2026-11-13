@@ -5,6 +5,14 @@ const env = process.env;
 const bool = (value, fallback) =>
     value === undefined ? fallback : ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
 
+// A number that is not negative; unlike `Number(value) || fallback`, 0 is a value of its own.
+const number = (value, fallback) => {
+    const parsed = value === undefined || value === '' ? NaN : Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
+
+const roles = (value) => value.split(',').map((role) => role.trim()).filter(Boolean);
+
 module.exports = Object.freeze({
     serverName: env.FREYA_SERVER_NAME || 'freya-ns-api-1',
     companyName: env.FREYA_COMPANY_NAME || 'YourCompany',
@@ -36,12 +44,23 @@ module.exports = Object.freeze({
     authEnabled: bool(env.FREYA_AUTH_ENABLED, true),
 
     // Roles that may change zones, records and the blocking, comma separated. Every signed-in user may read them.
-    dnsWriteRoles: (env.FREYA_DNS_WRITE_ROLES || 'admin').split(',').map((role) => role.trim()).filter(Boolean),
+    dnsWriteRoles: roles(env.FREYA_DNS_WRITE_ROLES || 'admin'),
 
     // When the block lists are downloaded again, as a cron expression. Empty: only on request.
     blockListRefreshCron: env.FREYA_BLOCKLIST_REFRESH_CRON ?? '0 4 * * *',
     // A download that is larger than this is refused.
     blockListMaxSizeMb: Number(env.FREYA_BLOCKLIST_MAX_SIZE_MB) || 64,
+
+    // Roles that may use the monitoring: record and read the queries, the clients and the metrics.
+    // The queries show what every client looks up, so this is not open to every signed-in user.
+    monitoringRoles: roles(env.FREYA_MONITORING_ROLES || 'admin'),
+    // How long a recorded query is kept, in days. 0: the queries are counted in the metrics, but not stored.
+    queryLogRetentionDays: number(env.FREYA_QUERY_LOG_RETENTION_DAYS, 30),
+    // How long the hourly metrics are kept, in days. 0: forever.
+    metricsRetentionDays: number(env.FREYA_METRICS_RETENTION_DAYS, 365),
+
+    // An import that is larger than this is refused.
+    importMaxSizeMb: number(env.FREYA_IMPORT_MAX_SIZE_MB, 50) || 50,
 
     // The Swagger UI at /api/docs. It only describes the API; using the API still requires signing in.
     docsEnabled: bool(env.FREYA_DOCS_ENABLED, true),

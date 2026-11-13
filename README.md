@@ -13,6 +13,10 @@ where the zones and records it serves are managed.
   [StevenBlack hosts file](https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts),
   and domains blocked or allowed by hand.
 - **Users** - accounts with an `admin` or `user` role, and passwords.
+- **Monitoring** - the queries the name server answered, its clients, and
+  hourly metrics.
+- **Export and import** - everything as one JSON document, to move it to
+  another system.
 - **Authentication** - login with a token, logout, and immediate revocation.
   Nothing but the login can be used without signing in.
 - **Swagger UI** - the whole API, described and ready to try, at `/api/docs`.
@@ -88,6 +92,10 @@ environment variable, so secrets do not have to be stored in the file.
 | `FREYA_BLOCKLIST_REFRESH_CRON` | `0 4 * * *` | When the block lists are downloaded again, as a cron expression. Set it to an empty value to download only on request |
 | `FREYA_BLOCKLIST_MAX_SIZE_MB` | `64` | A block list that is larger than this is refused |
 | `FREYA_DOCS_ENABLED` | `true` | Set to `false` to switch off the Swagger UI at `/api/docs` |
+| `FREYA_MONITORING_ROLES` | `admin` | Roles that may record and read the queries, the clients and the metrics, comma separated |
+| `FREYA_QUERY_LOG_RETENTION_DAYS` | `30` | How long a recorded query is kept. `0`: the queries are counted, but not stored |
+| `FREYA_METRICS_RETENTION_DAYS` | `365` | How long the hourly metrics are kept. `0`: forever |
+| `FREYA_IMPORT_MAX_SIZE_MB` | `50` | An import that is larger than this is refused |
 | `FREYA_SERVER_NAME` / `FREYA_COMPANY_NAME` | `freya-ns-api-1` / `YourCompany` | Shown in the welcome message |
 
 ## API
@@ -438,6 +446,223 @@ it is based on:
 }
 ```
 
+### Monitoring
+
+What the name server did: the queries it answered, the clients that sent them,
+and the metrics of every hour. The name server reports its queries to
+`POST /monitoring/queries`; the clients and the metrics are derived from them.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/monitoring/queries` | Record queries: `{ queries: [{ client, name, type, ... }] }` |
+| GET | `/monitoring/queries` | List the recorded queries, the newest first |
+| DELETE | `/monitoring/queries` | Delete the recorded queries: all, or those `before` a time |
+| GET | `/monitoring/metrics` | The counters of a period, as totals and as a series over time |
+| GET | `/monitoring/top` | The most asked and most blocked names, and the busiest clients |
+| GET | `/monitoring/clients` | List the clients, the last seen first |
+| GET | `/monitoring/clients/:clientId` | Read one client |
+| PATCH | `/monitoring/clients/:clientId` | Give a client a name: `{ name }` |
+| DELETE | `/monitoring/clients/:clientId` | Forget a client and its counters |
+
+The queries show what every client looks up, so all of the monitoring is for
+the roles in `FREYA_MONITORING_ROLES` only, `admin` by default; other signed-in
+users get 403.
+
+#### Recording queries
+
+```
+curl -X POST http://localhost:45451/api/monitoring/queries \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"queries":[{"client":"192.168.1.5","name":"www.example.com","type":"A","durationMs":4}]}'
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `client` | required | The IPv4 or IPv6 address of the client |
+| `name` | required | The name that was asked for |
+| `type` | required | The record type that was asked for, e.g. `A` |
+| `time` | now | When the query was answered |
+| `status` | `NOERROR` | The response code of the answer, e.g. `NXDOMAIN` or `SERVFAIL` |
+| `blocked` | `false` | Whether the name was blocked |
+| `durationMs` | `null` | How long the answer took, in milliseconds |
+
+Up to 5000 queries are taken in one request, so the name server can collect
+them and send them every few seconds. A batch with a query that is not valid is
+refused as a whole, and the answer says which ones. The name server needs an
+account with a monitoring role, and has to log in again when its token expires
+(`FREYA_TOKEN_EXPIRES_IN`). A name server that runs beside the API can skip
+HTTP and call `recordQueries` of `services/monitoringService/monitoringService.js`
+with the same object.
+
+`GET /monitoring/queries` accepts `page`, `limit`, `client`, `name`, `q` (a
+part of the name), `type`, `status`, `blocked`, `from`, `to` and `sort`
+(`time`, `client`, `name`, `type`, `status`, `durationMs`; `-time` by default).
+
+#### Metrics
+
+`GET /monitoring/metrics` accepts `from` and `to` (the last 24 hours when left
+out) and `interval` (`hour` or `day`; days are those of UTC):
+
+```
+{
+  "from": "2026-11-12T10:00:00.000Z",
+  "to": "2026-11-13T10:00:00.000Z",
+  "interval": "hour",
+  "totals": {
+    "queries": 18230,
+    "blocked": 2311,
+    "blockedPercent": 12.68,
+    "averageDurationMs": 3.41,
+    "clients": 14,
+    "statuses": { "NOERROR": 17650, "NXDOMAIN": 580 },
+    "types": { "A": 11020, "AAAA": 6900, "HTTPS": 310 }
+  },
+  "series": [
+    { "time": "2026-11-12T10:00:00.000Z", "queries": 640, "blocked": 71, "averageDurationMs": 3.2 }
+  ]
+}
+```
+
+The series has a point for every hour or day of the period, also for those
+without queries. `clients` is the number of clients that were seen in the
+period.
+
+`GET /monitoring/top` accepts `from`, `to` and `limit` (10 by default, at most
+100), and answers with `domains`, `blockedDomains` (`{ name, count }`) and
+`clients` (`{ address, name, count }`).
+
+#### Clients
+
+A client is an address that sent at least one query. It is listed by itself
+when its first query is recorded:
+
+```
+{
+  "id": "6af6c1d2beb489c32450fe31",
+  "address": "192.168.1.5",
+  "name": "Living room TV",
+  "firstSeenAt": "2026-11-02T18:04:11.000Z",
+  "lastSeenAt": "2026-11-13T09:58:40.000Z",
+  "queries": 48211,
+  "blocked": 9120
+}
+```
+
+Only the `name` is set by hand. `GET /monitoring/clients` accepts `page`,
+`limit`, `q` (text search in the address and the name) and `sort` (`address`,
+`name`, `firstSeenAt`, `lastSeenAt`, `queries`, `blocked`).
+
+#### How long it is kept
+
+| What | Kept for | Setting |
+| --- | --- | --- |
+| Queries | 30 days | `FREYA_QUERY_LOG_RETENTION_DAYS`. With `0` the queries are counted in the metrics and the clients, but not stored |
+| Metrics | 365 days | `FREYA_METRICS_RETENTION_DAYS`. With `0` they are kept forever |
+| Clients | until deleted | |
+
+What is too old is deleted every hour. The metrics are counted when a query is
+recorded, so they stay when the queries are deleted; `top` is counted from the
+stored queries, and reaches back only as far as those are kept. The counters of
+a client are counted since it was first seen.
+
+### Export and import
+
+Moves the configuration of a system to another one. Both are for the `admin`
+role only.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/backup/export` | Everything as one JSON document |
+| POST | `/backup/import` | Read such a document into this system |
+
+```
+curl -H "Authorization: Bearer <token>" \
+  "http://old:45451/api/backup/export?include=zones,records,blocking,users" -o export.json
+
+curl -X POST "http://new:45451/api/backup/import" \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  --data-binary @export.json
+```
+
+`include` chooses the sections of the export, comma separated:
+
+| Section | Contents | In the export by default |
+| --- | --- | --- |
+| `zones` | The zones, each with its SOA record and its records | yes |
+| `records` | The standalone records | yes |
+| `blocking` | The settings, the block lists and the block rules | yes |
+| `users` | The users, **with their password hashes** | no |
+
+The export looks like this:
+
+```
+{
+  "format": "freya-ns-api-export",
+  "formatVersion": 1,
+  "version": "2.2.0",
+  "exportedAt": "2026-11-13T10:15:00.000Z",
+  "data": {
+    "zones": [{ "name": "example.com", "ttl": 3600, "active": true, "soa": { ... }, "records": [ ... ] }],
+    "records": [{ "name": "nas.home.lan", "type": "A", "ttl": null, "data": { "target": "192.168.1.10" }, "active": true }],
+    "blocking": { "settings": { ... }, "lists": [ ... ], "rules": [ ... ] },
+    "users": [ ... ]
+  }
+}
+```
+
+The import reads the sections that are in the document, so a document can be
+cut down, or written by hand, to import only a part. `existing` says what
+happens to what this system has already:
+
+| `existing` | Meaning |
+| --- | --- |
+| `skip` (default) | What is there already is kept as it is; only what is missing is created |
+| `overwrite` | What is there already is updated from the export |
+
+What counts as "there already": a zone with the same name, a record with the
+same name, type and data (in the same zone), a block list with the same URL, a
+block rule with the same domain, and a user with the same username.
+
+The answer tells what was done:
+
+```
+{
+  "existing": "skip",
+  "zones": { "created": 2, "updated": 0, "skipped": 0, "failed": 0 },
+  "records": { "created": 41, "updated": 0, "skipped": 0, "failed": 1 },
+  "blockSettings": "updated",
+  "blockLists": { "created": 1, "updated": 0, "skipped": 0, "failed": 0 },
+  "blockRules": { "created": 3, "updated": 0, "skipped": 0, "failed": 0 },
+  "users": { "created": 4, "updated": 0, "skipped": 1, "failed": 0 },
+  "errors": [
+    { "section": "records", "item": "A www in example.com", "error": "Validation failed", "details": { "data.target": "data.target must be an IPv4 address" } }
+  ]
+}
+```
+
+Rules worth knowing:
+
+- An import never deletes anything.
+- An import is not all-or-nothing. An item that is refused is counted as
+  `failed` and listed in `errors` (the first 100), and the others are imported.
+  Only a document that is not an export at all is refused as a whole, with 400.
+- Everything is checked with the same rules as when it is created by hand.
+- A zone that is created by the import keeps the serial it was exported with.
+  The records that are missing from a zone that is there already are added to
+  it, also with `skip`.
+- The domains of the block lists are not exported. An imported list is
+  downloaded by the new system right away.
+- The block settings are imported when this system has never changed its own,
+  or with `overwrite`.
+- An imported user logs in with the password it had. The account that runs the
+  import is never changed by it, and the last active admin cannot be demoted or
+  deactivated.
+- An export with users holds password hashes: keep the file as safe as the
+  database itself.
+- The monitoring data - the queries, the clients and the metrics - is not
+  exported.
+- An import may be up to `FREYA_IMPORT_MAX_SIZE_MB` large, 50 MB by default.
+
 ### Errors
 
 Errors are returned with a matching HTTP status and this body:
@@ -451,7 +676,8 @@ Errors are returned with a matching HTTP status and this body:
 | 400 | The request is malformed or a value is not valid |
 | 401 | Not signed in, wrong credentials, or the token is expired or revoked |
 | 403 | Signed in, but not allowed to do this |
-| 404 | No such path, user, zone, record, block list or block rule |
+| 404 | No such path, user, zone, record, block list, block rule or client |
+| 413 | The request body is too large |
 | 409 | The username, e-mail, zone name, block list URL or block rule domain is already taken, the record already exists or conflicts with a CNAME, or the change would remove the last admin |
 
 ## Serving the zones with njord-ns-server
@@ -538,7 +764,7 @@ download that fails is written to the error log.
 | `config/` | Configuration |
 | `routes/` | HTTP endpoints |
 | `docs/` | The OpenAPI description behind `/api/docs`. Written by hand: change it together with the routes |
-| `services/` | Authentication, users, zones and records, blocking, logging and server start-up |
+| `services/` | Authentication, users, zones and records, blocking, monitoring, export and import, logging and server start-up |
 | `model/mongoDB/` | Database connection and data models |
 
 ## Release notes
@@ -556,8 +782,14 @@ download that fails is written to the error log.
   `/api/docs/openapi.json`.
 - A CNAME record is now refused when its name has records anywhere, not only in
   the same zone.
-- New settings: `FREYA_BLOCKLIST_REFRESH_CRON`, `FREYA_BLOCKLIST_MAX_SIZE_MB`
-  and `FREYA_DOCS_ENABLED`.
+- Monitoring: `/api/monitoring`, where the name server records the queries it
+  answered, and where the queries, the clients and the hourly metrics are read.
+- Export and import: `/api/backup/export` and `/api/backup/import`, to move the
+  zones, records, blocking and users to another system.
+- New settings: `FREYA_BLOCKLIST_REFRESH_CRON`, `FREYA_BLOCKLIST_MAX_SIZE_MB`,
+  `FREYA_DOCS_ENABLED`, `FREYA_MONITORING_ROLES`,
+  `FREYA_QUERY_LOG_RETENTION_DAYS`, `FREYA_METRICS_RETENTION_DAYS` and
+  `FREYA_IMPORT_MAX_SIZE_MB`.
 - New dependency: `swagger-ui-express`. Run `npm install` after updating.
 
 No data has to be migrated: the new collections and their indexes are created

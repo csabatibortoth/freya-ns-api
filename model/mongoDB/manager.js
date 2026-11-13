@@ -32,4 +32,7 @@ module.exports = {
     BlockEntry: require('./blockEntryModel'),
     BlockRule: require('./blockRuleModel'),
     BlockSettings: require('./blockSettingsModel'),
+    QueryLog: require('./queryLogModel'),
+    Client: require('./clientModel'),
+    Metric: require('./metricModel'),
 };
