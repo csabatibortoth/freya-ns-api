@@ -4,6 +4,7 @@ const config = require('./config/config');
 const logService = require('./services/logService/logService');
 const serverService = require('./services/serverService/serverService');
 const userService = require('./services/userService/userService');
+const blockListService = require('./services/blockingService/blockListService');
 const { createApp } = require('./app');
 
 function loadModelService() {
@@ -24,6 +25,7 @@ async function main() {
     await userService.ensureDefaultAdmin();
 
     const server = await serverService.startServer(createApp());
+    const blockListSchedule = blockListService.startSchedule();
     logService.serverStartedLog();
 
     let stopping = false;
@@ -31,6 +33,7 @@ async function main() {
         if (stopping) return;
         stopping = true;
         logService.addInfoLogBasicInfoEntry('Server stopping - ', signal);
+        if (blockListSchedule) await blockListSchedule.stop();
         await serverService.stopServer(server);
         await modelService.disconnectFromDB();
         process.exit(0);

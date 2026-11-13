@@ -35,8 +35,16 @@ module.exports = Object.freeze({
 
     authEnabled: bool(env.FREYA_AUTH_ENABLED, true),
 
-    // Roles that may change zones and records, comma separated. Every signed-in user may read them.
+    // Roles that may change zones, records and the blocking, comma separated. Every signed-in user may read them.
     dnsWriteRoles: (env.FREYA_DNS_WRITE_ROLES || 'admin').split(',').map((role) => role.trim()).filter(Boolean),
+
+    // When the block lists are downloaded again, as a cron expression. Empty: only on request.
+    blockListRefreshCron: env.FREYA_BLOCKLIST_REFRESH_CRON ?? '0 4 * * *',
+    // A download that is larger than this is refused.
+    blockListMaxSizeMb: Number(env.FREYA_BLOCKLIST_MAX_SIZE_MB) || 64,
+
+    // The Swagger UI at /api/docs. It only describes the API; using the API still requires signing in.
+    docsEnabled: bool(env.FREYA_DOCS_ENABLED, true),
 
     // Created on startup when the user collection is empty. Without a password
     // a random one is generated and printed once to the console.

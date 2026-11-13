@@ -7,8 +7,15 @@ where the zones and records it serves are managed.
 - **Zones and records** - create, change and delete DNS zones and their A, AAAA,
   CNAME, MX, NS, PTR, SRV and TXT records. The SOA record and its serial are
   kept for you.
+- **Standalone records** - records that belong to no zone, for the names that
+  need no zone of their own, such as the machines of a home network.
+- **Blocking** - block lists downloaded from a URL, such as the
+  [StevenBlack hosts file](https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts),
+  and domains blocked or allowed by hand.
 - **Users** - accounts with an `admin` or `user` role, and passwords.
 - **Authentication** - login with a token, logout, and immediate revocation.
+  Nothing but the login can be used without signing in.
+- **Swagger UI** - the whole API, described and ready to try, at `/api/docs`.
 
 The server is built on Express 5 and MongoDB (Mongoose 9). The zones and records
 are stored in MongoDB and checked with the validators of
@@ -55,6 +62,9 @@ curl -X POST http://localhost:45451/api/zones/<zoneId>/records \
 
 The first answer holds the `token`, the second the `id` of the zone.
 
+The same can be done from the browser: open `http://localhost:45451/api/docs`,
+log in with `POST /auth/login`, press **Authorize** and paste the token.
+
 ## Configuration
 
 Defaults live in `config/config.js`. Every value can be overridden with an
@@ -74,7 +84,10 @@ environment variable, so secrets do not have to be stored in the file.
 | `FREYA_ADMIN_USER` / `FREYA_ADMIN_EMAIL` / `FREYA_ADMIN_PWD` | `admin` / `admin@localhost` / random | The admin account created on first start |
 | `FREYA_LOGGING_ENABLED` / `FREYA_LOG_FOLDER` | `true` / `services/logService/logs` | File logging |
 | `FREYA_AUTH_ENABLED` | `true` | Set to `false` to skip token checks. For local development only: every request is then treated as an admin |
-| `FREYA_DNS_WRITE_ROLES` | `admin` | Roles that may change zones and records, comma separated, e.g. `admin,user`. Every signed-in user may read them |
+| `FREYA_DNS_WRITE_ROLES` | `admin` | Roles that may change zones, records and the blocking, comma separated, e.g. `admin,user`. Every signed-in user may read them |
+| `FREYA_BLOCKLIST_REFRESH_CRON` | `0 4 * * *` | When the block lists are downloaded again, as a cron expression. Set it to an empty value to download only on request |
+| `FREYA_BLOCKLIST_MAX_SIZE_MB` | `64` | A block list that is larger than this is refused |
+| `FREYA_DOCS_ENABLED` | `true` | Set to `false` to switch off the Swagger UI at `/api/docs` |
 | `FREYA_SERVER_NAME` / `FREYA_COMPANY_NAME` | `freya-ns-api-1` / `YourCompany` | Shown in the welcome message |
 
 ## API
@@ -82,11 +95,18 @@ environment variable, so secrets do not have to be stored in the file.
 All paths are under `/api`. Requests and responses are JSON. After logging in,
 send the token with every request as `Authorization: Bearer <token>`.
 
+Every endpoint requires signing in, except `POST /auth/login`. Without a valid
+token the answer is 401, also for a path that does not exist.
+
+The API is described in OpenAPI 3: `/api/docs` shows it with Swagger UI, and
+`/api/docs/openapi.json` serves it for other tools. These two hold no data and
+are open without signing in; set `FREYA_DOCS_ENABLED=false` to switch them off.
+
 ### Authentication
 
 | Method | Path | Who | Purpose |
 | --- | --- | --- | --- |
-| GET | `/` | anyone | Welcome message and version |
+| GET | `/` | signed in | Welcome message and version |
 | POST | `/auth/login` | anyone | `{ username, password }` returns a token. The username may also be the e-mail address |
 | GET | `/auth/me` | signed in | The current user |
 | POST | `/auth/logout` | signed in | Revokes every token of the current user |
@@ -221,10 +241,202 @@ A record looks like this:
 Rules worth knowing:
 
 - Host names in `data` must be fully qualified; they are not completed with the zone.
-- A name that has a CNAME record cannot have any other record, and the zone
-  itself cannot be a CNAME.
+- A name that has a CNAME record cannot have any other record, and the name of
+  a zone cannot be a CNAME. This holds across the zones and the standalone
+  records.
 - Two identical records (same name, type and data) cannot exist in a zone.
 - Every change to a record raises the serial of its zone.
+
+### Standalone records
+
+A record does not need a zone. The standalone records are for the names that
+are answered without being an authority for their domain: the machines of a
+home network, or a single name that is overridden.
+
+| Method | Path | Who | Purpose |
+| --- | --- | --- | --- |
+| GET | `/records` | signed in | List the standalone records |
+| POST | `/records` | admin | Create a record: `{ name, type, data, ttl?, active? }` |
+| GET | `/records/:recordId` | signed in | Read one record |
+| PATCH | `/records/:recordId` | admin | Update `name`, `data`, `ttl` or `active` |
+| DELETE | `/records/:recordId` | admin | Delete a record |
+
+```
+curl -X POST http://localhost:45451/api/records \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"name":"nas.home.lan","type":"A","data":{"target":"192.168.1.10"}}'
+```
+
+They work as the records of a zone, with the same types, `data`, query
+parameters and rules. The differences:
+
+- `name` must be fully qualified, as there is no zone to complete it with. It
+  may be a single label (`nas`), and its first label may be `*`.
+- `zone` is `null`.
+- `ttl: null` means the default TTL of the name server, as there is no zone to
+  take it from.
+- There is no SOA record and no serial.
+
+`/records` only holds the standalone records; the records of a zone are read
+and changed under their zone.
+
+### Blocking
+
+The name server can refuse to resolve unwanted domains: advertising, trackers,
+malware. What is blocked comes from two places:
+
+- **Block lists** - lists of domains that are downloaded from a URL.
+- **Block rules** - single domains that are blocked, or allowed, by hand.
+
+| Method | Path | Who | Purpose |
+| --- | --- | --- | --- |
+| GET | `/blocking/settings` | signed in | Read the settings |
+| PATCH | `/blocking/settings` | admin | Update `enabled` or `mode` |
+| GET | `/blocking/check?domain=` | signed in | Tell whether a domain is blocked, and why |
+| GET | `/blocking/lists` | signed in | List the block lists |
+| POST | `/blocking/lists` | admin | Add a block list: `{ name, url, description?, active? }` |
+| GET | `/blocking/lists/:listId` | signed in | Read one block list |
+| PATCH | `/blocking/lists/:listId` | admin | Update `name`, `url`, `description` or `active` |
+| DELETE | `/blocking/lists/:listId` | admin | Delete a block list **and all of its domains** |
+| POST | `/blocking/lists/:listId/refresh` | admin | Download the list again, and wait for it |
+| POST | `/blocking/lists/refresh` | admin | Download every active list again, in the background |
+| GET | `/blocking/lists/:listId/entries` | signed in | List the domains of a block list |
+| GET | `/blocking/rules` | signed in | List the block rules |
+| POST | `/blocking/rules` | admin | Create a rule: `{ domain, action, includeSubdomains?, comment?, active? }` |
+| GET | `/blocking/rules/:ruleId` | signed in | Read one rule |
+| PATCH | `/blocking/rules/:ruleId` | admin | Update a rule |
+| DELETE | `/blocking/rules/:ruleId` | admin | Delete a rule |
+
+"admin" stands for the roles in `FREYA_DNS_WRITE_ROLES` here as well.
+
+#### Block lists
+
+```
+curl -X POST http://localhost:45451/api/blocking/lists \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"name":"StevenBlack","url":"https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"}'
+```
+
+The answer comes at once, with the status `pending`; the list is downloaded in
+the background. Read the list again to see how it went:
+
+```
+{
+  "id": "6af6bca9beb489c32450fe0b",
+  "name": "StevenBlack",
+  "url": "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
+  "description": "",
+  "active": true,
+  "status": "ok",
+  "lastError": null,
+  "refreshedAt": "2026-11-13T04:00:03.512Z",
+  "entryCount": 78215,
+  "refreshing": false
+}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `name` | required | A name for the list, of at most 100 characters |
+| `url` | required | Where the list is downloaded from, with `http` or `https`. A URL can be added once |
+| `description` | empty | A note, of at most 500 characters |
+| `active` | `true` | The domains of an inactive list are kept, but are not blocked |
+| `status` | | `pending`: not downloaded yet. `ok` or `error`: the outcome of the last download |
+| `lastError` | | Why the last download failed |
+| `refreshedAt` | | The time of the last successful download |
+| `entryCount` | | The number of domains of the list |
+| `refreshing` | | Whether the list is being downloaded right now |
+
+Three formats are understood, and may be mixed in one list:
+
+| Format | Line |
+| --- | --- |
+| hosts file | `0.0.0.0 ads.example.com` - an address followed by one or more names |
+| list of domains | `ads.example.com` |
+| adblock rule | `\|\|ads.example.com^` |
+
+Comments (`#`, `!`), the `localhost` names of a hosts file, and the adblock
+rules of any other form are skipped.
+
+Rules worth knowing:
+
+- The active lists are downloaded again on the schedule of
+  `FREYA_BLOCKLIST_REFRESH_CRON`, every day at 04:00 by default.
+- A download only writes what changed, so a domain that stays on the list is
+  blocked without a gap.
+- A download that fails, or that holds no domains, keeps the domains the list
+  had, and sets `status` to `error`. `POST .../refresh` answers with 200 in
+  this case too: look at the `status` of the answer.
+- Changing the `url` downloads the list again right away.
+- A list is matched by the exact name: `ads.example.com` on a list does not
+  block `www.ads.example.com`.
+- The API downloads whatever URL it is given, from where it runs. Leave the
+  write roles to the people who are trusted with that.
+
+`GET /blocking/lists` accepts `page`, `limit`, `q` (text search in the name,
+url and description), `active`, `status` and `sort` (`name`, `url`, `active`,
+`status`, `entryCount`, `refreshedAt`, `createdAt`, `updatedAt`).
+`GET /blocking/lists/:listId/entries` accepts `page`, `limit` and `q` (a part
+of the domain); its items are the domains, as text.
+
+#### Block rules
+
+A rule blocks or allows one domain by hand, and wins over the block lists.
+
+```
+{
+  "id": "6af6bcaabeb489c32450fe1a",
+  "domain": "ads.example.com",
+  "action": "allow",
+  "includeSubdomains": false,
+  "comment": "needed by the TV",
+  "active": true
+}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `domain` | required | A fully qualified domain name. A domain can have one rule |
+| `action` | required | `block`, or `allow` to take a domain out of the block lists |
+| `includeSubdomains` | `false` | Whether the rule holds for every name below the domain as well |
+| `comment` | empty | A note, of at most 500 characters |
+| `active` | `true` | An inactive rule is kept, but is not applied |
+
+`GET /blocking/rules` accepts `page`, `limit`, `q` (text search in the domain
+and the comment), `action`, `active` and `sort` (`domain`, `action`, `active`,
+`createdAt`, `updatedAt`).
+
+#### Settings, and how a name is decided
+
+```
+{ "enabled": true, "mode": "NULL_IP" }
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | The switch of all blocking. When `false` nothing is blocked, and the lists and rules are kept |
+| `mode` | `NULL_IP` | How a blocked name is answered: `NULL_IP` with `0.0.0.0` and `::`, `NXDOMAIN` as a name that does not exist |
+
+Whether a name is blocked is decided in this order:
+
+1. When the blocking is not enabled, it is not blocked.
+2. The active rule of the name itself decides, or else that of the nearest
+   domain above it that has `includeSubdomains`.
+3. Without such a rule, the name is blocked when an active block list holds it.
+
+`GET /blocking/check?domain=ads.example.com` makes this decision and shows what
+it is based on:
+
+```
+{
+  "domain": "ads.example.com",
+  "blocked": true,
+  "enabled": true,
+  "mode": "NULL_IP",
+  "rule": null,
+  "lists": [{ "id": "6af6bca9beb489c32450fe0b", "name": "StevenBlack" }]
+}
+```
 
 ### Errors
 
@@ -239,8 +451,8 @@ Errors are returned with a matching HTTP status and this body:
 | 400 | The request is malformed or a value is not valid |
 | 401 | Not signed in, wrong credentials, or the token is expired or revoked |
 | 403 | Signed in, but not allowed to do this |
-| 404 | No such path, user, zone or record |
-| 409 | The username, e-mail or zone name is already taken, the record already exists or conflicts with a CNAME, or the change would remove the last admin |
+| 404 | No such path, user, zone, record, block list or block rule |
+| 409 | The username, e-mail, zone name, block list URL or block rule domain is already taken, the record already exists or conflicts with a CNAME, or the change would remove the last admin |
 
 ## Serving the zones with njord-ns-server
 
@@ -272,7 +484,9 @@ server.on('query', async (query) => {
       .populate('zone', 'ttl active')
       .lean();
     for (const record of records) {
-      if (record.zone.active) query.addAnswer(name, toRecord(record), record.ttl ?? record.zone.ttl);
+      // A standalone record has no zone: it is served by itself, with a default TTL.
+      if (!record.zone) query.addAnswer(name, toRecord(record), record.ttl ?? 3600);
+      else if (record.zone.active) query.addAnswer(name, toRecord(record), record.ttl ?? record.zone.ttl);
     }
   }
   server.send(query);
@@ -286,12 +500,34 @@ following a CNAME, answers for names that do not exist and zone transfers are
 left to the server. The `active` flag of a zone or a record has no effect by
 itself either; it is the server that must skip what is inactive, as above.
 
+The same goes for the blocking: this API stores what is blocked, in the
+`blockentries` (`{ list, domain }`), `blocklists`, `blockrules` and
+`blocksettings` collections, and the name server is what must refuse the name
+before it answers. `check` in `services/blockingService/blockingService.js` is
+the decision to follow, and can be called as it is from a server that runs
+beside the API:
+
+```javascript
+const { check } = require('./services/blockingService/blockingService');
+
+// at the top of the query handler
+const { blocked, mode } = await check(query.name());
+if (blocked) {
+  if (mode === 'NULL_IP' && query.type() === 'A') query.addAnswer(name, new named.ARecord('0.0.0.0'), 60);
+  if (mode === 'NULL_IP' && query.type() === 'AAAA') query.addAnswer(name, new named.AAAARecord('::'), 60);
+  // NXDOMAIN: set the response code the way your version of the server does it
+  return server.send(query);
+}
+```
+
 ## Logs
 
 When logging is enabled, three files are written per day to the log folder:
 `log-<date>.log` (general), `error-<date>.log` (failures) and
 `security-<date>.log` (logins and every change to a user). Changes to zones and
 records are written to the general log, with the name of the user who made them.
+So are the changes to the blocking and every download of a block list; a
+download that fails is written to the error log.
 
 ## Project layout
 
@@ -301,10 +537,31 @@ records are written to the general log, with the name of the user who made them.
 | `app.js` | Express application, routes and error handling |
 | `config/` | Configuration |
 | `routes/` | HTTP endpoints |
-| `services/` | Authentication, users, zones and records, logging and server start-up |
+| `docs/` | The OpenAPI description behind `/api/docs`. Written by hand: change it together with the routes |
+| `services/` | Authentication, users, zones and records, blocking, logging and server start-up |
 | `model/mongoDB/` | Database connection and data models |
 
 ## Release notes
+
+### Unreleased
+
+- Every endpoint requires signing in, except `POST /api/auth/login`.
+  **`GET /api/` now needs a token as well**, and a path that does not exist
+  answers 401 instead of 404 to a request without one.
+- Standalone records: `/api/records`, for records that belong to no zone.
+- Blocking: `/api/blocking`, with block lists that are downloaded from a URL
+  and refreshed on a schedule, block and allow rules for single domains, a
+  switch for all blocking, and a check of a domain.
+- Swagger UI at `/api/docs`, and the OpenAPI description at
+  `/api/docs/openapi.json`.
+- A CNAME record is now refused when its name has records anywhere, not only in
+  the same zone.
+- New settings: `FREYA_BLOCKLIST_REFRESH_CRON`, `FREYA_BLOCKLIST_MAX_SIZE_MB`
+  and `FREYA_DOCS_ENABLED`.
+- New dependency: `swagger-ui-express`. Run `npm install` after updating.
+
+No data has to be migrated: the new collections and their indexes are created
+on the first start, and the existing records keep their zone.
 
 ### 2.2.0
 

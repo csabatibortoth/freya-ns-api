@@ -3,6 +3,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 
 const config = require('./config/config');
+const { authenticate } = require('./services/authService/authService');
 const HttpError = require('./services/httpError');
 const logService = require('./services/logService/logService');
 
@@ -16,15 +17,22 @@ function createApp() {
     app.use(express.urlencoded({ extended: false, limit: '100kb' }));
 
     const router = express.Router();
+    if (config.docsEnabled) router.use('/docs', require('./routes/docsRoutes'));
+    // Logging in is the only thing that can be done without a token; the rest of /auth checks it by itself.
+    router.use('/auth', require('./routes/authRoutes'));
+
+    // Everything below this line requires signing in, including the paths that do not exist.
+    router.use(authenticate);
     router.get('/', (req, res) => {
         res.json({
             message: `Welcome to ${config.serverName} server by ${config.companyName}!`,
             version: config.version,
         });
     });
-    router.use('/auth', require('./routes/authRoutes'));
     router.use('/users', require('./routes/userRoutes'));
     router.use('/zones', require('./routes/zoneRoutes'));
+    router.use('/records', require('./routes/recordRoutes'));
+    router.use('/blocking', require('./routes/blockingRoutes'));
     app.use('/api', router);
 
     app.use((req, res, next) => next(new HttpError(404, 'Not found')));
