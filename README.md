@@ -1,6 +1,6 @@
 # freya-ns-api
 
-Management API for the Freya DNS server, version 2.3.0. It is the administrative
+Management API for the Freya DNS server, version 2.3.1. It is the administrative
 side of the name server: the place where the people who run it are managed,
 where the zones and records it serves and the domains it blocks are managed, and
 where what it did can be looked up.
@@ -713,7 +713,7 @@ The export looks like this:
 {
   "format": "freya-ns-api-export",
   "formatVersion": 1,
-  "version": "2.3.0",
+  "version": "2.3.1",
   "exportedAt": "2026-11-13T10:15:00.000Z",
   "data": {
     "zones": [{ "name": "example.com", "ttl": 3600, "active": true, "soa": { ... }, "records": [ ... ] }],
@@ -883,6 +883,40 @@ download that fails is written to the error log.
 | `model/mongoDB/` | Database connection and data models |
 
 ## Release notes
+
+### 2.3.1
+
+New in this release:
+
+- **HTTPS with Let's Encrypt**: with `FREYA_HTTPS_ENABLED=true` and
+  `FREYA_HTTPS_DOMAINS`, the server requests its certificate from Let's Encrypt
+  and renews it by itself. See [HTTPS](#https).
+- **Custom certificates**: `FREYA_HTTPS_CERT_SOURCE=custom` serves a private
+  key and a certificate from anywhere else. They can be replaced without a
+  restart, through the API or by overwriting the files.
+- **The certificate endpoints**: `/api/certificate`, to see the certificate
+  that is served, to send a custom one, and to renew it on request.
+
+Changed, and worth checking before updating:
+
+- **Let's Encrypt is the default source of the certificate.** A server that
+  already runs with `FREYA_HTTPS_ENABLED=true` and its own files in
+  `FREYA_HTTPS_KEY` / `FREYA_HTTPS_CERT` has to set
+  `FREYA_HTTPS_CERT_SOURCE=custom`, or it does not start. Nothing changes for a
+  server that runs over plain HTTP.
+- The key and the certificate are checked on start: a key that does not belong
+  to the certificate stops the server with a message, instead of failing at the
+  first connection.
+
+Updating:
+
+- Run `npm install`: `acme-client` is a new dependency.
+- No data has to be migrated.
+- New settings, all with a default except the first: `FREYA_HTTPS_DOMAINS`
+  (required for Let's Encrypt), `FREYA_HTTPS_CERT_SOURCE`, `FREYA_ACME_EMAIL`,
+  `FREYA_ACME_DIRECTORY`, `FREYA_ACME_HTTP_PORT`, `FREYA_ACME_FOLDER` and
+  `FREYA_HTTPS_KEY_PASSPHRASE`.
+- The keys are kept under `sslcert/`, which is now in `.gitignore`.
 
 ### 2.3.0
 
