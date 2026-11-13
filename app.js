@@ -40,6 +40,7 @@ function createApp() {
     router.use('/blocking', require('./routes/blockingRoutes'));
     router.use('/monitoring', require('./routes/monitoringRoutes'));
     router.use('/backup', require('./routes/backupRoutes'));
+    router.use('/certificate', require('./routes/certificateRoutes'));
     app.use('/api', router);
 
     app.use((req, res, next) => next(new HttpError(404, 'Not found')));

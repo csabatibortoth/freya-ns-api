@@ -23,9 +23,26 @@ module.exports = Object.freeze({
     httpsServerPort: Number(env.FREYA_HTTPS_PORT) || 45452,
     httpEnabled: bool(env.FREYA_HTTP_ENABLED, true),
     httpsEnabled: bool(env.FREYA_HTTPS_ENABLED, false),
+    // Where the certificate of HTTPS comes from. letsencrypt: requested and renewed by the server itself.
+    // custom: a private key and a certificate from anywhere else, in the two files below.
+    httpsCertSource: (env.FREYA_HTTPS_CERT_SOURCE || 'letsencrypt').trim().toLowerCase(),
+    // custom: the certificate file may hold the chain as well. The passphrase is for a key that is encrypted.
     httpsKeyFile: env.FREYA_HTTPS_KEY || 'sslcert/server.key',
     httpsCertFile: env.FREYA_HTTPS_CERT || 'sslcert/server.crt',
-    version: '2.3.0',
+    httpsKeyPassphrase: env.FREYA_HTTPS_KEY_PASSPHRASE || '',
+    // letsencrypt: the public names of this server the certificate is requested for, comma separated.
+    httpsDomains: roles(env.FREYA_HTTPS_DOMAINS || '').map((domain) => domain.toLowerCase()),
+    // letsencrypt: where the warnings about the certificate are sent. Optional.
+    acmeEmail: env.FREYA_ACME_EMAIL || '',
+    // letsencrypt: production, staging (for trying it out: no strict limits, but not trusted by browsers),
+    // or the URL of the directory of another certificate authority that speaks ACME.
+    acmeDirectory: (env.FREYA_ACME_DIRECTORY || 'production').trim(),
+    // letsencrypt: the port that answers the challenge. The authority always connects to port 80 of the name:
+    // change this only when that port is forwarded to another one.
+    acmeHttpPort: number(env.FREYA_ACME_HTTP_PORT, 80),
+    // letsencrypt: where the account key, the private key and the certificate are kept.
+    acmeFolder: env.FREYA_ACME_FOLDER || 'sslcert/letsencrypt',
+    version: '2.3.1',
     type: env.FREYA_TYPE || 'DEV',
 
     modelServerType: 'MNG',

@@ -1,6 +1,6 @@
 # freya-ns-api
 
-Management API for the Freya DNS server, version 2.3.0. It is the administrative
+Management API for the Freya DNS server, version 2.3.1. It is the administrative
 side of the name server: the place where the people who run it are managed,
 where the zones and records it serves and the domains it blocks are managed, and
 where what it did can be looked up.
@@ -21,6 +21,8 @@ where what it did can be looked up.
 - **Authentication** - login with a token, logout, and immediate revocation.
   Nothing but the login can be used without signing in.
 - **Swagger UI** - the whole API, described and ready to try, at `/api/docs`.
+- **HTTPS** - with a certificate from Let's Encrypt that renews itself, or with
+  one of your own.
 
 The server is built on Express 5 and MongoDB (Mongoose 9). The zones and records
 are stored in MongoDB and checked with the validators of
@@ -81,8 +83,15 @@ environment variable, so secrets do not have to be stored in the file.
 | `FREYA_SECRET` | `Test` | Key used to sign login tokens |
 | `FREYA_TOKEN_EXPIRES_IN` | `1h` | Lifetime of a login token |
 | `FREYA_HTTP_ENABLED` / `FREYA_HTTP_PORT` | `true` / `45451` | Plain HTTP listener |
-| `FREYA_HTTPS_ENABLED` / `FREYA_HTTPS_PORT` | `false` / `45452` | HTTPS listener; takes precedence over HTTP when enabled |
-| `FREYA_HTTPS_KEY` / `FREYA_HTTPS_CERT` | `sslcert/server.key` / `sslcert/server.crt` | Certificate files for HTTPS |
+| `FREYA_HTTPS_ENABLED` / `FREYA_HTTPS_PORT` | `false` / `45452` | HTTPS listener; takes precedence over HTTP when enabled. See [HTTPS](#https) |
+| `FREYA_HTTPS_CERT_SOURCE` | `letsencrypt` | Where the certificate comes from: `letsencrypt` or `custom` |
+| `FREYA_HTTPS_DOMAINS` | – | `letsencrypt`: the public names of this server, comma separated. Required |
+| `FREYA_ACME_EMAIL` | – | `letsencrypt`: an address for the account at the certificate authority. Optional |
+| `FREYA_ACME_DIRECTORY` | `production` | `letsencrypt`: `production`, `staging`, or the directory URL of another ACME certificate authority |
+| `FREYA_ACME_HTTP_PORT` | `80` | `letsencrypt`: the port that answers the challenge of the certificate authority |
+| `FREYA_ACME_FOLDER` | `sslcert/letsencrypt` | `letsencrypt`: where the account key, the private key and the certificate are kept |
+| `FREYA_HTTPS_KEY` / `FREYA_HTTPS_CERT` | `sslcert/server.key` / `sslcert/server.crt` | `custom`: the private key and the certificate, in PEM. The certificate may be followed by its chain |
+| `FREYA_HTTPS_KEY_PASSPHRASE` | – | `custom`: the passphrase of the private key, when it is encrypted |
 | `FREYA_DB_URI` | – | Full MongoDB connection string; overrides the separate settings below |
 | `FREYA_DB_ADDRESS` / `FREYA_DB_PORT` / `FREYA_DB_NAME` | `127.0.0.1` / `27017` / `freya-ns-api-1` | MongoDB location |
 | `FREYA_DB_USER` / `FREYA_DB_PWD` | `Test` / `Test` | MongoDB credentials; set the user to an empty value to connect without authentication |
@@ -98,6 +107,110 @@ environment variable, so secrets do not have to be stored in the file.
 | `FREYA_METRICS_RETENTION_DAYS` | `365` | How long the hourly metrics are kept. `0`: forever |
 | `FREYA_IMPORT_MAX_SIZE_MB` | `50` | An import that is larger than this is refused |
 | `FREYA_SERVER_NAME` / `FREYA_COMPANY_NAME` | `freya-ns-api-1` / `YourCompany` | Shown in the welcome message |
+
+## HTTPS
+
+Set `FREYA_HTTPS_ENABLED=true` to serve the API over HTTPS, on port 45452 by
+default. The plain HTTP listener is not started then. The certificate comes
+from one of two sources, chosen with `FREYA_HTTPS_CERT_SOURCE`.
+
+### Let's Encrypt
+
+The default. The server requests a certificate from
+[Let's Encrypt](https://letsencrypt.org) on the first start, and renews it by
+itself when it has less than 30 days left, without a restart.
+
+```
+FREYA_HTTPS_ENABLED=true
+FREYA_HTTPS_DOMAINS=dns.example.com
+FREYA_ACME_EMAIL=admin@example.com      # optional
+```
+
+What it takes:
+
+- Every name in `FREYA_HTTPS_DOMAINS` must lead to this server in the public
+  DNS. Wildcards and IP addresses are not possible.
+- **Port 80 must reach this server from the internet.** Let's Encrypt checks
+  each name by asking for a token over plain HTTP on port 80. The server
+  answers on `FREYA_ACME_HTTP_PORT`, only while a certificate is being
+  requested, and serves nothing else there. Where the process may not open
+  port 80, forward it to another port and set `FREYA_ACME_HTTP_PORT` to that.
+- Requesting a certificate means accepting the
+  [Subscriber Agreement](https://letsencrypt.org/repository/) of Let's Encrypt.
+
+Try it first with `FREYA_ACME_DIRECTORY=staging`: the staging certificates are
+not trusted by a browser, but the strict
+[rate limits](https://letsencrypt.org/docs/rate-limits/) of production do not
+apply while the setup is being worked out. `FREYA_ACME_DIRECTORY` also takes
+the directory URL of any other certificate authority that speaks ACME.
+
+The account key, the private key and the certificate are kept in
+`FREYA_ACME_FOLDER`, in one folder per certificate authority, and are used
+again on the next start. Keep that folder private and out of version control;
+`sslcert/` is in `.gitignore`.
+
+When the first certificate cannot be obtained, the server does not start, and
+says why. A renewal that fails is written to the error log and tried again
+after six hours; the certificate that is there keeps being served.
+
+### Custom certificate
+
+A certificate from anywhere else: your own certificate authority, a commercial
+one, or a self-signed one.
+
+```
+FREYA_HTTPS_ENABLED=true
+FREYA_HTTPS_CERT_SOURCE=custom
+FREYA_HTTPS_KEY=sslcert/server.key
+FREYA_HTTPS_CERT=sslcert/server.crt
+```
+
+Both files are PEM. The certificate file may hold the chain after the
+certificate. The server does not start without them, or when the key does not
+belong to the certificate.
+
+It can be replaced while the server runs, in two ways:
+
+- Send the new one to `PUT /api/certificate`. It is checked, written to the
+  two files, and served at once.
+- Overwrite the two files, as a tool that renews them would. The server
+  notices within the hour; `POST /api/certificate/renew` reads them right away.
+  Files that cannot be used are left alone, and the certificate that is served
+  stays.
+
+### The certificate endpoints
+
+| Method | Path | Who | Purpose |
+| --- | --- | --- | --- |
+| GET | `/certificate` | admin | The source, and the certificate that is served |
+| PUT | `/certificate` | admin | Replace the custom certificate: `{ certificate, privateKey }`, both in PEM |
+| POST | `/certificate/renew` | admin | Let's Encrypt: request a new certificate now. Custom: read the files again |
+
+```
+{
+  "enabled": true,
+  "source": "letsencrypt",
+  "domains": ["dns.example.com"],
+  "automaticRenewal": true,
+  "certificate": {
+    "subject": "CN=dns.example.com",
+    "issuer": "C=US, O=Let's Encrypt, CN=E7",
+    "altNames": ["dns.example.com"],
+    "validFrom": "2026-11-13T09:12:44.000Z",
+    "validTo": "2027-02-11T09:12:43.000Z",
+    "daysLeft": 89,
+    "serialNumber": "05A1...",
+    "fingerprint256": "68:7B:A8:..."
+  },
+  "lastCheckAt": "2026-11-13T10:23:00.000Z",
+  "lastError": null
+}
+```
+
+The private key is never part of an answer. `PUT /certificate` answers 409
+when the source is `letsencrypt`, and 400 for a certificate that is expired or
+does not match its key. `POST /certificate/renew` answers 502 when the
+certificate authority refused, with its reason.
 
 ## API
 
@@ -600,7 +713,7 @@ The export looks like this:
 {
   "format": "freya-ns-api-export",
   "formatVersion": 1,
-  "version": "2.3.0",
+  "version": "2.3.1",
   "exportedAt": "2026-11-13T10:15:00.000Z",
   "data": {
     "zones": [{ "name": "example.com", "ttl": 3600, "active": true, "soa": { ... }, "records": [ ... ] }],
@@ -679,6 +792,7 @@ Errors are returned with a matching HTTP status and this body:
 | 403 | Signed in, but not allowed to do this |
 | 404 | No such path, user, zone, record, block list, block rule or client |
 | 413 | The request body is too large |
+| 502 | The certificate authority did not issue a certificate |
 | 409 | The username, e-mail, zone name, block list URL or block rule domain is already taken, the record already exists or conflicts with a CNAME, or the change would remove the last admin |
 
 ## Serving the zones with njord-ns-server
@@ -765,10 +879,44 @@ download that fails is written to the error log.
 | `config/` | Configuration |
 | `routes/` | HTTP endpoints |
 | `docs/` | The OpenAPI description behind `/api/docs`. Written by hand: change it together with the routes |
-| `services/` | Authentication, users, zones and records, blocking, monitoring, export and import, logging and server start-up |
+| `services/` | Authentication, users, zones and records, blocking, monitoring, export and import, the certificate of HTTPS, logging and server start-up |
 | `model/mongoDB/` | Database connection and data models |
 
 ## Release notes
+
+### 2.3.1
+
+New in this release:
+
+- **HTTPS with Let's Encrypt**: with `FREYA_HTTPS_ENABLED=true` and
+  `FREYA_HTTPS_DOMAINS`, the server requests its certificate from Let's Encrypt
+  and renews it by itself. See [HTTPS](#https).
+- **Custom certificates**: `FREYA_HTTPS_CERT_SOURCE=custom` serves a private
+  key and a certificate from anywhere else. They can be replaced without a
+  restart, through the API or by overwriting the files.
+- **The certificate endpoints**: `/api/certificate`, to see the certificate
+  that is served, to send a custom one, and to renew it on request.
+
+Changed, and worth checking before updating:
+
+- **Let's Encrypt is the default source of the certificate.** A server that
+  already runs with `FREYA_HTTPS_ENABLED=true` and its own files in
+  `FREYA_HTTPS_KEY` / `FREYA_HTTPS_CERT` has to set
+  `FREYA_HTTPS_CERT_SOURCE=custom`, or it does not start. Nothing changes for a
+  server that runs over plain HTTP.
+- The key and the certificate are checked on start: a key that does not belong
+  to the certificate stops the server with a message, instead of failing at the
+  first connection.
+
+Updating:
+
+- Run `npm install`: `acme-client` is a new dependency.
+- No data has to be migrated.
+- New settings, all with a default except the first: `FREYA_HTTPS_DOMAINS`
+  (required for Let's Encrypt), `FREYA_HTTPS_CERT_SOURCE`, `FREYA_ACME_EMAIL`,
+  `FREYA_ACME_DIRECTORY`, `FREYA_ACME_HTTP_PORT`, `FREYA_ACME_FOLDER` and
+  `FREYA_HTTPS_KEY_PASSPHRASE`.
+- The keys are kept under `sslcert/`, which is now in `.gitignore`.
 
 ### 2.3.0
 
