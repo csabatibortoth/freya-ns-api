@@ -290,10 +290,14 @@ It can be replaced while the server runs, in two ways:
     "serialNumber": "05A1...",
     "fingerprint256": "68:7B:A8:..."
   },
+  "challenge": { "type": "http-01", "provider": null, "recordsToAdd": [] },
   "lastCheckAt": "2026-11-13T10:23:00.000Z",
   "lastError": null
 }
 ```
+
+`challenge` tells how the names are proven; with the provider `delegation`,
+`recordsToAdd` lists the CNAME records to add at the real DNS.
 
 The private key is never part of an answer. `PUT /certificate` answers 409
 when the source is `letsencrypt`, and 400 for a certificate that is expired or
