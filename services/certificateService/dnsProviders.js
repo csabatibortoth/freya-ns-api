@@ -1,7 +1,9 @@
 // The places a DNS-01 challenge record can be written. A provider is an object with
 // create(name, value), remove(name, value) and optionally visible(name, value): see dnsChallenge.js.
 // Each entry builds its provider when it is needed, so a provider that is not used costs nothing.
-const FACTORIES = {};
+const zones = require('./zonesProvider');
+
+const FACTORIES = { zones: zones.provider };
 
 const names = () => Object.keys(FACTORIES);
 
@@ -17,4 +19,9 @@ function get(name) {
     return FACTORIES[name]();
 }
 
-module.exports = { get, names, FACTORIES };
+// Records a provider made for itself that a crash may have left behind: removed when the server starts.
+async function removeLeftovers() {
+    return zones.removeLeftovers();
+}
+
+module.exports = { get, names, FACTORIES, removeLeftovers, configureZones: zones.configure };

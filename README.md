@@ -1,6 +1,6 @@
 # freya-ns-api
 
-Management API for the Freya DNS server, version 2.3.1. It is the administrative
+Management API for the Freya DNS server, version 2.4.0. It is the administrative
 side of the name server: the place where the people who run it are managed,
 where the zones and records it serves and the domains it blocks are managed, and
 where what it did can be looked up.
@@ -89,6 +89,9 @@ environment variable, so secrets do not have to be stored in the file.
 | `FREYA_ACME_EMAIL` | – | `letsencrypt`: an address for the account at the certificate authority. Optional |
 | `FREYA_ACME_DIRECTORY` | `production` | `letsencrypt`: `production`, `staging`, or the directory URL of another ACME certificate authority |
 | `FREYA_ACME_HTTP_PORT` | `80` | `letsencrypt`: the port that answers the challenge of the certificate authority |
+| `FREYA_ACME_CHALLENGE` | `http-01` | `letsencrypt`: how the names are proven: `http-01`, `dns-01`, or `auto` (dns-01 for a wildcard name, http-01 for the rest). See [DNS validation](#dns-validation-dns-01) |
+| `FREYA_ACME_DNS_PROVIDER` | – | `dns-01`: where the TXT record is written. `zones`: the zones of this server |
+| `FREYA_ACME_DNS_WAIT` | `120` | `dns-01`: seconds to wait until the record is answered, before the authority is asked |
 | `FREYA_ACME_FOLDER` | `sslcert/letsencrypt` | `letsencrypt`: where the account key, the private key and the certificate are kept |
 | `FREYA_HTTPS_KEY` / `FREYA_HTTPS_CERT` | `sslcert/server.key` / `sslcert/server.crt` | `custom`: the private key and the certificate, in PEM. The certificate may be followed by its chain |
 | `FREYA_HTTPS_KEY_PASSPHRASE` | – | `custom`: the passphrase of the private key, when it is encrypted |
@@ -129,7 +132,8 @@ FREYA_ACME_EMAIL=admin@example.com      # optional
 What it takes:
 
 - Every name in `FREYA_HTTPS_DOMAINS` must lead to this server in the public
-  DNS. Wildcards and IP addresses are not possible.
+  DNS. IP addresses are not possible, and wildcards only with the
+  [DNS validation](#dns-validation-dns-01) below.
 - **Port 80 must reach this server from the internet.** Let's Encrypt checks
   each name by asking for a token over plain HTTP on port 80. The server
   answers on `FREYA_ACME_HTTP_PORT`, only while a certificate is being
@@ -152,6 +156,45 @@ again on the next start. Keep that folder private and out of version control;
 When the first certificate cannot be obtained, the server does not start, and
 says why. A renewal that fails is written to the error log and tried again
 after six hours; the certificate that is there keeps being served.
+
+#### DNS validation (dns-01)
+
+Instead of port 80, the authority looks for a TXT record at
+`_acme-challenge.<name>`. That works for wildcard names (`*.example.com`), for
+a server that cannot be reached on port 80, and it needs no free port during
+issue and renewal. Nothing changes until `FREYA_ACME_CHALLENGE` is set:
+`http-01` stays the default.
+
+```
+FREYA_ACME_CHALLENGE=dns-01             # or auto
+FREYA_ACME_DNS_PROVIDER=zones
+FREYA_HTTPS_DOMAINS=example.com,*.example.com
+```
+
+- `dns-01`: every name is proven through DNS; port 80 is never opened.
+  `auto`: a wildcard name through DNS, the other names over HTTP.
+- A wildcard and its base name (`*.example.com` and `example.com`) need two
+  values at the same record name; both are written, and each is removed alone.
+- The record is written, and the authority is asked only when it is really
+  answered; after `FREYA_ACME_DNS_WAIT` seconds without that, the order is
+  given up with a clear error. The record is removed afterwards, also when the
+  order fails.
+- Provider `zones`: the name must belong to an active zone of this server
+  (the longest matching zone is used). No account and no credentials. The
+  provider can create and delete one kind of record only: a TXT record named
+  `_acme-challenge.*`, marked transient. A transient record is answered by the
+  name server, left out of the record lists, the export and the backup, does
+  not raise the serial of the zone, and is deleted when the server starts.
+- **Only this server has the record.** It is not copied to secondaries (they
+  copy on a schedule, and a transient record is not exported). A certificate
+  authority asks the public name servers of the zone: when a secondary is one
+  of them, it can ask a server that does not know the record, and the check
+  fails. Use this provider when this server is the one that answers for the
+  names it certifies.
+- Try it with `FREYA_ACME_DIRECTORY=staging` first.
+
+The record is served by the name server that shares the database: the
+management API alone does not answer DNS queries. Odin does both.
 
 ### Custom certificate
 
@@ -883,6 +926,22 @@ download that fails is written to the error log.
 | `model/mongoDB/` | Database connection and data models |
 
 ## Release notes
+
+### 2.4.0
+
+New in this release:
+
+- **Let's Encrypt with DNS validation**: `FREYA_ACME_CHALLENGE=dns-01` (or
+  `auto`) proves the names through a TXT record instead of port 80, which also
+  makes wildcard names possible. With the provider `zones`
+  (`FREYA_ACME_DNS_PROVIDER=zones`) a name that belongs to a zone of this
+  server is validated without any account. Nothing changes by default
+  (`http-01`). See [DNS validation](#dns-validation-dns-01).
+- **Transient records**: a record the server makes for itself. It is answered,
+  but hidden from the record lists, the export and the backup, and deleted at
+  start.
+- `npm test` runs the tests (some need a MongoDB on 127.0.0.1, or
+  `FREYA_TEST_MONGO`; without one they are skipped).
 
 ### 2.3.1
 

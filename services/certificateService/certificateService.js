@@ -287,6 +287,10 @@ async function load() {
     if (!SOURCES.includes(source)) {
         throw new Error(`FREYA_HTTPS_CERT_SOURCE must be one of ${SOURCES.join(', ')}: ${source}`);
     }
+    if (source === 'letsencrypt') {
+        // A challenge record that a crash left behind; the database is connected before the certificate is loaded.
+        await dnsProviders.removeLeftovers().catch((err) => console.error(`Old challenge records could not be removed: ${err.message}`));
+    }
     active = source === 'custom' ? await readCustom() : await loadLetsEncrypt();
     if (expired(active.x509)) {
         const message = `The certificate expired on ${validTo(active.x509).toISOString()}. It is served as it is: replace it.`;
