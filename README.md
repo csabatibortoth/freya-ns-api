@@ -90,7 +90,8 @@ environment variable, so secrets do not have to be stored in the file.
 | `FREYA_ACME_DIRECTORY` | `production` | `letsencrypt`: `production`, `staging`, or the directory URL of another ACME certificate authority |
 | `FREYA_ACME_HTTP_PORT` | `80` | `letsencrypt`: the port that answers the challenge of the certificate authority |
 | `FREYA_ACME_CHALLENGE` | `http-01` | `letsencrypt`: how the names are proven: `http-01`, `dns-01`, or `auto` (dns-01 for a wildcard name, http-01 for the rest). See [DNS validation](#dns-validation-dns-01) |
-| `FREYA_ACME_DNS_PROVIDER` | – | `dns-01`: where the TXT record is written. `zones`: the zones of this server; `cloudflare`: the DNS of a domain hosted at Cloudflare |
+| `FREYA_ACME_DNS_PROVIDER` | – | `dns-01`: where the TXT record is written. `zones`: the zones of this server; `cloudflare`: the DNS of a domain hosted at Cloudflare; `delegation`: any DNS, through one CNAME per name |
+| `FREYA_ACME_DELEGATION_ZONE` | – | `delegation`: a zone hosted on this server, e.g. `acme.example.net`, that the challenge names point to |
 | `FREYA_ACME_CLOUDFLARE_TOKEN` / `FREYA_ACME_CLOUDFLARE_TOKEN_FILE` | – | `cloudflare`: an API token limited to one zone, or a file whose first line is the token (preferred: the file can be mode 600) |
 | `FREYA_ACME_CLOUDFLARE_ZONE_ID` | – | `cloudflare`: optional; without it the zone is found by name (the token then also needs `Zone: Read`) |
 | `FREYA_ACME_DNS_WAIT` | `120` | `dns-01`: seconds to wait until the record is answered, before the authority is asked |
@@ -209,6 +210,30 @@ FREYA_HTTPS_DOMAINS=example.com,*.example.com
   FREYA_ACME_CHALLENGE=dns-01
   FREYA_ACME_DNS_PROVIDER=cloudflare
   FREYA_ACME_CLOUDFLARE_TOKEN_FILE=/etc/freya/cloudflare.token
+  FREYA_HTTPS_DOMAINS=example.com,*.example.com
+  ```
+- Provider `delegation`: for a domain whose DNS is anywhere else (a registrar,
+  any DNS host), with no API and no key of that provider. Host a zone on this
+  server, e.g. `acme.example.net`, and make this server its public name server
+  (NS record at the parent). Then the owner of each domain adds ONE record at
+  the real DNS, once:
+
+  ```
+  _acme-challenge.example.com   CNAME   _acme-challenge.example.com.acme.example.net
+  ```
+
+  The certificate authority follows the CNAME and finds the TXT record, which
+  this server writes into `acme.example.net` (through the provider `zones`).
+  A wildcard counts as its base name: `*.example.com` and `example.com` use the
+  same CNAME. The key of the real domain never reaches this machine. The status
+  of the certificate (`challenge.recordsToAdd`) lists the exact records to add
+  for `FREYA_HTTPS_DOMAINS`, and a failed wait says which one is missing:
+  the CNAME, or the answer of this server.
+
+  ```
+  FREYA_ACME_CHALLENGE=dns-01
+  FREYA_ACME_DNS_PROVIDER=delegation
+  FREYA_ACME_DELEGATION_ZONE=acme.example.net
   FREYA_HTTPS_DOMAINS=example.com,*.example.com
   ```
 - Try it with `FREYA_ACME_DIRECTORY=staging` first.
@@ -961,6 +986,9 @@ New in this release:
   challenge record through the API of Cloudflare, for domains whose DNS is
   hosted there. The provider interface is small (`create`, `remove`,
   `visible`), so others can follow.
+- **CNAME delegation**: `FREYA_ACME_DNS_PROVIDER=delegation` works with any
+  DNS host: one CNAME per name at the real DNS points to a zone of this server,
+  which answers the challenge. The status lists the records to add.
 - **Transient records**: a record the server makes for itself. It is answered,
   but hidden from the record lists, the export and the backup, and deleted at
   start.

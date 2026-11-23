@@ -5,9 +5,11 @@ const zones = require('./zonesProvider');
 
 const config = require('../../config/config');
 const cloudflare = require('./cloudflareProvider');
+const delegation = require('./delegationProvider');
 
 const FACTORIES = {
     zones: zones.provider,
+    delegation: () => delegation.createProvider({ zone: config.acmeDelegationZone, inner: zones.provider() }),
     cloudflare: () =>
         cloudflare.createProvider({
             token: config.acmeCloudflareToken,

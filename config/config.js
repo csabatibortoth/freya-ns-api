@@ -45,6 +45,9 @@ module.exports = Object.freeze({
     acmeChallenge: (env.FREYA_ACME_CHALLENGE || 'http-01').trim().toLowerCase(),
     // dns-01: where the TXT record is written, e.g. zones (the zones of this server). See the README.
     acmeDnsProvider: (env.FREYA_ACME_DNS_PROVIDER || '').trim().toLowerCase(),
+    // dns-01, provider delegation: a zone hosted on this server (e.g. acme.example.net). The owner of each domain adds
+    // _acme-challenge.<domain> CNAME _acme-challenge.<domain>.<this zone> at the real DNS, once.
+    acmeDelegationZone: (env.FREYA_ACME_DELEGATION_ZONE || '').trim().toLowerCase(),
     // dns-01, provider cloudflare: an API token limited to one zone (permission DNS: Edit, and Zone: Read), given directly
     // or as a file (the first line). The zone id is optional: without it the zone is found by name.
     acmeCloudflareToken: env.FREYA_ACME_CLOUDFLARE_TOKEN || '',

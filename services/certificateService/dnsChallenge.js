@@ -7,6 +7,7 @@ const dns = require('dns');
 //   create(name, value)   writes the TXT record (async)
 //   remove(name, value)   removes exactly that value, never the other values at the same name (async)
 //   visible(name, value)  optional: true when the record is answered, where the authority will look (async)
+//   diagnose(name)        optional: why the record is not visible, in a sentence for the person who set it up (async)
 // Without `visible`, public resolvers are asked.
 
 const PREFIX = '_acme-challenge.';
@@ -68,9 +69,11 @@ function createHandlers(provider, { waitSeconds = 120, sleep = sleepFor, now = D
         for (;;) {
             if (await visible(name, value).catch(() => false)) return;
             if (now() + delay > deadline) {
+                // A provider may know why: for the delegation, which of the two records is missing.
+                const why = provider.diagnose ? await provider.diagnose(name).catch(() => '') : '';
                 throw new Error(
                     `The record ${name} was written but could not be seen within ${waitSeconds} seconds, so the authority was not asked. ` +
-                        'Check that the name server answers for this name; FREYA_ACME_DNS_WAIT allows more time.'
+                        (why || 'Check that the name server answers for this name; FREYA_ACME_DNS_WAIT allows more time.')
                 );
             }
             await sleep(delay);

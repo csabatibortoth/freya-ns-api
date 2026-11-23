@@ -9,6 +9,7 @@ const HttpError = require('../httpError');
 const logService = require('../logService/logService');
 const dnsChallenge = require('./dnsChallenge');
 const dnsProviders = require('./dnsProviders');
+const delegationProvider = require('./delegationProvider');
 
 // The certificate of the HTTPS listener. It comes from one of two sources:
 //   letsencrypt - requested from Let's Encrypt (or another ACME directory) and renewed by the server itself;
@@ -350,6 +351,17 @@ function startSchedule() {
 
 const oneLine = (name) => name.split('\n').filter(Boolean).join(', ');
 
+function challengeStatus() {
+    const type = config.acmeChallenge;
+    const provider = type === 'http-01' ? null : config.acmeDnsProvider || null;
+    let recordsToAdd = [];
+    if (provider === 'delegation' && config.acmeDelegationZone) {
+        const wanted = config.httpsDomains.map((domain) => delegationProvider.recordToAdd(domain, config.acmeDelegationZone));
+        recordsToAdd = [...new Map(wanted.map((record) => [record.name, record])).values()];
+    }
+    return { type, provider, recordsToAdd };
+}
+
 function status() {
     const x509 = active?.x509;
     return {
@@ -372,6 +384,8 @@ function status() {
                   fingerprint256: x509.fingerprint256,
               }
             : null,
+        // What the owner of the names has to know: how they are proven, and the records to add at the real DNS.
+        challenge: source === 'letsencrypt' ? challengeStatus() : null,
         lastCheckAt: state.lastCheckAt,
         lastError: state.lastError,
     };
