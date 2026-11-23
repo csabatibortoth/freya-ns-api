@@ -90,7 +90,9 @@ environment variable, so secrets do not have to be stored in the file.
 | `FREYA_ACME_DIRECTORY` | `production` | `letsencrypt`: `production`, `staging`, or the directory URL of another ACME certificate authority |
 | `FREYA_ACME_HTTP_PORT` | `80` | `letsencrypt`: the port that answers the challenge of the certificate authority |
 | `FREYA_ACME_CHALLENGE` | `http-01` | `letsencrypt`: how the names are proven: `http-01`, `dns-01`, or `auto` (dns-01 for a wildcard name, http-01 for the rest). See [DNS validation](#dns-validation-dns-01) |
-| `FREYA_ACME_DNS_PROVIDER` | – | `dns-01`: where the TXT record is written. `zones`: the zones of this server |
+| `FREYA_ACME_DNS_PROVIDER` | – | `dns-01`: where the TXT record is written. `zones`: the zones of this server; `cloudflare`: the DNS of a domain hosted at Cloudflare |
+| `FREYA_ACME_CLOUDFLARE_TOKEN` / `FREYA_ACME_CLOUDFLARE_TOKEN_FILE` | – | `cloudflare`: an API token limited to one zone, or a file whose first line is the token (preferred: the file can be mode 600) |
+| `FREYA_ACME_CLOUDFLARE_ZONE_ID` | – | `cloudflare`: optional; without it the zone is found by name (the token then also needs `Zone: Read`) |
 | `FREYA_ACME_DNS_WAIT` | `120` | `dns-01`: seconds to wait until the record is answered, before the authority is asked |
 | `FREYA_ACME_FOLDER` | `sslcert/letsencrypt` | `letsencrypt`: where the account key, the private key and the certificate are kept |
 | `FREYA_HTTPS_KEY` / `FREYA_HTTPS_CERT` | `sslcert/server.key` / `sslcert/server.crt` | `custom`: the private key and the certificate, in PEM. The certificate may be followed by its chain |
@@ -191,9 +193,27 @@ FREYA_HTTPS_DOMAINS=example.com,*.example.com
   of them, it can ask a server that does not know the record, and the check
   fails. Use this provider when this server is the one that answers for the
   names it certifies.
+- Provider `cloudflare`: for a domain whose DNS is at Cloudflare. Create an
+  API token (Cloudflare dashboard, My Profile, API Tokens) with the permissions
+  `Zone: DNS: Edit` and `Zone: Zone: Read`, limited to the one zone. Never the
+  global API key. Put it in a file that only the server can read and set
+  `FREYA_ACME_CLOUDFLARE_TOKEN_FILE`. The token is sent only to
+  `api.cloudflare.com` over HTTPS, never written to a log or an error. Only
+  TXT records named `_acme-challenge.*` are created, and only a record with
+  exactly the value written is removed. The name must belong to a zone of the
+  account. Whether the proxy (orange cloud) is on does not matter: TXT records
+  are not proxied. The authority is asked after the record is visible to
+  public resolvers.
+
+  ```
+  FREYA_ACME_CHALLENGE=dns-01
+  FREYA_ACME_DNS_PROVIDER=cloudflare
+  FREYA_ACME_CLOUDFLARE_TOKEN_FILE=/etc/freya/cloudflare.token
+  FREYA_HTTPS_DOMAINS=example.com,*.example.com
+  ```
 - Try it with `FREYA_ACME_DIRECTORY=staging` first.
 
-The record is served by the name server that shares the database: the
+The record of the provider `zones` is served by the name server that shares the database: the
 management API alone does not answer DNS queries. Odin does both.
 
 ### Custom certificate
@@ -937,6 +957,10 @@ New in this release:
   (`FREYA_ACME_DNS_PROVIDER=zones`) a name that belongs to a zone of this
   server is validated without any account. Nothing changes by default
   (`http-01`). See [DNS validation](#dns-validation-dns-01).
+- **Cloudflare provider**: `FREYA_ACME_DNS_PROVIDER=cloudflare` writes the
+  challenge record through the API of Cloudflare, for domains whose DNS is
+  hosted there. The provider interface is small (`create`, `remove`,
+  `visible`), so others can follow.
 - **Transient records**: a record the server makes for itself. It is answered,
   but hidden from the record lists, the export and the backup, and deleted at
   start.

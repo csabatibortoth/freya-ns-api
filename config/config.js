@@ -45,6 +45,11 @@ module.exports = Object.freeze({
     acmeChallenge: (env.FREYA_ACME_CHALLENGE || 'http-01').trim().toLowerCase(),
     // dns-01: where the TXT record is written, e.g. zones (the zones of this server). See the README.
     acmeDnsProvider: (env.FREYA_ACME_DNS_PROVIDER || '').trim().toLowerCase(),
+    // dns-01, provider cloudflare: an API token limited to one zone (permission DNS: Edit, and Zone: Read), given directly
+    // or as a file (the first line). The zone id is optional: without it the zone is found by name.
+    acmeCloudflareToken: env.FREYA_ACME_CLOUDFLARE_TOKEN || '',
+    acmeCloudflareTokenFile: env.FREYA_ACME_CLOUDFLARE_TOKEN_FILE || '',
+    acmeCloudflareZoneId: (env.FREYA_ACME_CLOUDFLARE_ZONE_ID || '').trim(),
     // dns-01: seconds to wait for the record to be answered before giving up.
     acmeDnsWait: number(env.FREYA_ACME_DNS_WAIT, 120),
     // letsencrypt: where the account key, the private key and the certificate are kept.

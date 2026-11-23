@@ -3,7 +3,18 @@
 // Each entry builds its provider when it is needed, so a provider that is not used costs nothing.
 const zones = require('./zonesProvider');
 
-const FACTORIES = { zones: zones.provider };
+const config = require('../../config/config');
+const cloudflare = require('./cloudflareProvider');
+
+const FACTORIES = {
+    zones: zones.provider,
+    cloudflare: () =>
+        cloudflare.createProvider({
+            token: config.acmeCloudflareToken,
+            tokenFile: config.acmeCloudflareTokenFile,
+            zoneId: config.acmeCloudflareZoneId,
+        }),
+};
 
 const names = () => Object.keys(FACTORIES);
 
