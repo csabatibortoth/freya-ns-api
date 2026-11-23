@@ -40,9 +40,16 @@ module.exports = Object.freeze({
     // letsencrypt: the port that answers the challenge. The authority always connects to port 80 of the name:
     // change this only when that port is forwarded to another one.
     acmeHttpPort: number(env.FREYA_ACME_HTTP_PORT, 80),
+    // letsencrypt: how the names are proven to be this server's. http-01 (default): the authority connects to port 80.
+    // dns-01: a TXT record is written (needed for wildcard names; no port 80). auto: dns-01 for a wildcard, http-01 for the rest.
+    acmeChallenge: (env.FREYA_ACME_CHALLENGE || 'http-01').trim().toLowerCase(),
+    // dns-01: where the TXT record is written, e.g. zones (the zones of this server). See the README.
+    acmeDnsProvider: (env.FREYA_ACME_DNS_PROVIDER || '').trim().toLowerCase(),
+    // dns-01: seconds to wait for the record to be answered before giving up.
+    acmeDnsWait: number(env.FREYA_ACME_DNS_WAIT, 120),
     // letsencrypt: where the account key, the private key and the certificate are kept.
     acmeFolder: env.FREYA_ACME_FOLDER || 'sslcert/letsencrypt',
-    version: '2.3.1',
+    version: '2.4.0',
     type: env.FREYA_TYPE || 'DEV',
 
     modelServerType: 'MNG',
