@@ -90,7 +90,7 @@ environment variable, so secrets do not have to be stored in the file.
 | `FREYA_ACME_DIRECTORY` | `production` | `letsencrypt`: `production`, `staging`, or the directory URL of another ACME certificate authority |
 | `FREYA_ACME_HTTP_PORT` | `80` | `letsencrypt`: the port that answers the challenge of the certificate authority |
 | `FREYA_ACME_CHALLENGE` | `http-01` | `letsencrypt`: how the names are proven: `http-01`, `dns-01`, or `auto` (dns-01 for a wildcard name, http-01 for the rest). See [DNS validation](#dns-validation-dns-01) |
-| `FREYA_ACME_DNS_PROVIDER` | – | `dns-01`: where the TXT record is written. `zones`: the zones of this server; `cloudflare`: the DNS of a domain hosted at Cloudflare; `rfc2136`: a DNS UPDATE with a TSIG key to the master name server of the zone (BIND, Knot, PowerDNS ...); `delegation`: any DNS, through one CNAME per name |
+| `FREYA_ACME_DNS_PROVIDER` | – | `dns-01`: where the TXT record is written. `zones`: the zones of this server; `cloudflare`: the DNS of a domain hosted at Cloudflare; `rfc2136`: a DNS UPDATE with a TSIG key to the master name server of the zone (BIND, Knot, PowerDNS ...); `hook`: a program of yours sets and removes the record; `delegation`: any DNS, through one CNAME per name |
 | `FREYA_ACME_DELEGATION_ZONE` | – | `delegation`: a zone hosted on this server, e.g. `acme.example.net`, that the challenge names point to |
 | `FREYA_ACME_CLOUDFLARE_TOKEN` / `FREYA_ACME_CLOUDFLARE_TOKEN_FILE` | – | `cloudflare`: an API token limited to one zone, or a file whose first line is the token (preferred: the file can be mode 600) |
 | `FREYA_ACME_RFC2136_SERVER` | – | `rfc2136`: the master name server of the zone, `host`, `host:port` or `[v6]:port` (port 53 if omitted) |
@@ -98,6 +98,8 @@ environment variable, so secrets do not have to be stored in the file.
 | `FREYA_ACME_RFC2136_KEY_NAME` | – | `rfc2136`: the name of the TSIG key, as in the `key "name"` of the name server |
 | `FREYA_ACME_RFC2136_KEY_ALGORITHM` | `hmac-sha256` | `rfc2136`: `hmac-sha256`, `hmac-sha384` or `hmac-sha512` (MD5 and SHA-1 are refused) |
 | `FREYA_ACME_RFC2136_KEY_SECRET` / `FREYA_ACME_RFC2136_KEY_FILE` | – | `rfc2136`: the base64 secret of the key, or a file whose first line is the secret (preferred: the file can be mode 600) |
+| `FREYA_ACME_HOOK` | – | `hook`: the absolute path of your program, called as `<program> create\|remove <name> <value>` (see [DNS validation](#dns-validation-dns-01)). Environment only |
+| `FREYA_ACME_HOOK_TIMEOUT` | `60` | `hook`: seconds before the program is stopped (1 to 300) |
 | `FREYA_ACME_CLOUDFLARE_ZONE_ID` | – | `cloudflare`: optional; without it the zone is found by name (the token then also needs `Zone: Read`) |
 | `FREYA_ACME_DNS_WAIT` | `120` | `dns-01`: seconds to wait until the record is answered, before the authority is asked |
 | `FREYA_ACME_DNS_SETTLE` | `60` | `dns-01`: seconds to wait after the record is visible, before the authority is asked (0 to 120; 0 switches it off) |
@@ -226,6 +228,23 @@ FREYA_HTTPS_DOMAINS=example.com,*.example.com
   The server must be reachable over TCP on the port (the master, not a secondary), and the clocks of both sides within five minutes. The
   record counts as visible when the zone's own name servers have it (the public resolvers are the fallback), so a secondary that has
   not yet received the zone transfer delays the order until `FREYA_ACME_DNS_WAIT`.
+- Provider `hook`: for DNS that has no other way in (a registrar with a script, an internal tool). Freya calls your program as
+  `<program> create <name> <value>` and `<program> remove <name> <value>` (also in `ACME_ACTION`, `ACME_NAME`, `ACME_VALUE`, `ACME_DOMAIN`);
+  exit code 0 means done (for `create`: the record is published at your name servers). Rules, all checked by the tests:
+  the path is given in the environment only (`FREYA_ACME_HOOK`, no API setting can change it); it must be absolute, executable, and neither it nor its
+  folder may be writable by group or others (owned by root or the user of this server), checked again at every call; the program is started without a
+  shell; name and value are validated first; the hook gets an empty environment (only `PATH` and the `ACME_*` variables, not the settings or tokens of
+  this server); it is stopped after `FREYA_ACME_HOOK_TIMEOUT` seconds; only one call runs at a time (a wildcard and its base name write two values at one name).
+  An error shows the exit code and the last line of the error output of the hook (200 characters). A sample:
+
+  ```sh
+  #!/bin/sh
+  # /usr/local/lib/freya/acme-hook.sh  (chmod 755, owned by root)
+  case "$1" in
+    create) exec /usr/local/bin/my-dns-tool add-txt "$2" "$3" ;;
+    remove) exec /usr/local/bin/my-dns-tool del-txt "$2" "$3" ;;
+  esac
+  ```
 - Provider `cloudflare`: for a domain whose DNS is at Cloudflare. Create an
   API token (Cloudflare dashboard, My Profile, API Tokens) with the permissions
   `Zone: DNS: Edit` and `Zone: Zone: Read`, limited to the one zone. Never the
@@ -1034,6 +1053,7 @@ download that fails is written to the error log.
 
 #### New
 
+- **DNS validation through your own program** (`FREYA_ACME_DNS_PROVIDER=hook`, `FREYA_ACME_HOOK`): see [DNS validation](#dns-validation-dns-01) for the rules (absolute path from the environment only, not writable by others, no shell, empty environment, time limit, one call at a time).
 - **DNS validation through RFC 2136 + TSIG** (`FREYA_ACME_DNS_PROVIDER=rfc2136`): the challenge record is written with a signed DNS UPDATE to the master name server of the zone,
   so any DNS server that accepts dynamic updates can be used. See [DNS validation](#dns-validation-dns-01).
   Checked against BIND 9.18 (create, remove, two values at one name, wrong key, wrong secret, wrong zone) and with a recorded, signed exchange in the tests.

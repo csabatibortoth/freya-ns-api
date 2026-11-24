@@ -61,6 +61,10 @@ module.exports = Object.freeze({
     acmeRfc2136KeyAlgorithm: (env.FREYA_ACME_RFC2136_KEY_ALGORITHM || 'hmac-sha256').trim().toLowerCase(),
     acmeRfc2136KeySecret: env.FREYA_ACME_RFC2136_KEY_SECRET || '',
     acmeRfc2136KeyFile: env.FREYA_ACME_RFC2136_KEY_FILE || '',
+    // dns-01, provider hook: the absolute path of a program of the administrator, called as `<program> create|remove <name> <value>`.
+    // Environment only, on purpose: it is a program that runs with the rights of this server, so no setting of the API may point to it.
+    acmeHook: (env.FREYA_ACME_HOOK || '').trim(),
+    acmeHookTimeout: number(env.FREYA_ACME_HOOK_TIMEOUT, 60),
     // dns-01: seconds to wait after the record is visible, before the authority is asked (it validates from several places
     // with caches of their own). 0 switches it off.
     acmeDnsSettle: number(env.FREYA_ACME_DNS_SETTLE, 60),

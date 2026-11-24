@@ -7,10 +7,12 @@ const config = require('../../config/config');
 const cloudflare = require('./cloudflareProvider');
 const delegation = require('./delegationProvider');
 const rfc2136 = require('./rfc2136Provider');
+const hook = require('./hookProvider');
 
 const FACTORIES = {
     zones: zones.provider,
     delegation: () => delegation.createProvider({ zone: config.acmeDelegationZone, inner: zones.provider() }),
+    hook: () => hook.createProvider({ program: config.acmeHook, timeoutSeconds: config.acmeHookTimeout }),
     rfc2136: () =>
         rfc2136.createProvider({
             server: config.acmeRfc2136Server,
