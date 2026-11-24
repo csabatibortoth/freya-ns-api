@@ -97,7 +97,7 @@ environment variable, so secrets do not have to be stored in the file.
 | `FREYA_ACME_RFC2136_ZONE` | – | `rfc2136`: the zone that is updated, e.g. `example.com` (every challenge name must be inside it) |
 | `FREYA_ACME_RFC2136_KEY_NAME` | – | `rfc2136`: the name of the TSIG key, as in the `key "name"` of the name server |
 | `FREYA_ACME_RFC2136_KEY_ALGORITHM` | `hmac-sha256` | `rfc2136`: `hmac-sha256`, `hmac-sha384` or `hmac-sha512` (MD5 and SHA-1 are refused) |
-| `FREYA_ACME_RFC2136_KEY_SECRET` / `FREYA_ACME_RFC2136_KEY_FILE` | – | `rfc2136`: the base64 secret of the key, or a file whose first line is the secret (preferred: the file can be mode 600) |
+| `FREYA_ACME_RFC2136_KEY_SECRET` / `FREYA_ACME_RFC2136_KEY_FILE` | – | `rfc2136`: the base64 secret of the key, or a file whose first line is the secret (preferred). The file must be readable and writable by its owner only (mode 600 or 400, owned by root or the user of this server), or the provider refuses to start; symlinks are followed and the real file is checked. On Windows use the variable |
 | `FREYA_ACME_HOOK` | – | `hook`: the absolute path of your program, called as `<program> create\|remove <name> <value>` (see [DNS validation](#dns-validation-dns-01)). Environment only |
 | `FREYA_ACME_HOOK_TIMEOUT` | `60` | `hook`: seconds before the program is stopped (1 to 300) |
 | `FREYA_ACME_CLOUDFLARE_ZONE_ID` | – | `cloudflare`: optional; without it the zone is found by name (the token then also needs `Zone: Read`) |
@@ -231,8 +231,10 @@ FREYA_HTTPS_DOMAINS=example.com,*.example.com
 - Provider `hook`: for DNS that has no other way in (a registrar with a script, an internal tool). Freya calls your program as
   `<program> create <name> <value>` and `<program> remove <name> <value>` (also in `ACME_ACTION`, `ACME_NAME`, `ACME_VALUE`, `ACME_DOMAIN`);
   exit code 0 means done (for `create`: the record is published at your name servers). Rules, all checked by the tests:
-  the path is given in the environment only (`FREYA_ACME_HOOK`, no API setting can change it); it must be absolute, executable, and neither it nor its
-  folder may be writable by group or others (owned by root or the user of this server), checked again at every call; the program is started without a
+  the path is given in the environment only (`FREYA_ACME_HOOK`, no API setting can change it); it must be absolute, executable, and neither it, nor its
+  folder, nor any folder above it up to the root may be writable by group or others (all owned by root or the user of this server; only a "sticky" folder of root like `/tmp`
+  may be shared, and not the folder that holds the program), checked again at every call, and the checked (resolved) path is the one that is started; **not available on Windows**
+  (the permissions there are ACLs, which are not checked yet); the program is started without a
   shell; name and value are validated first; the hook gets an empty environment (only `PATH` and the `ACME_*` variables, not the settings or tokens of
   this server); it is stopped after `FREYA_ACME_HOOK_TIMEOUT` seconds; only one call runs at a time (a wildcard and its base name write two values at one name).
   An error shows the exit code and the last line of the error output of the hook (200 characters). A sample:
@@ -1050,6 +1052,11 @@ download that fails is written to the error log.
 ## Release notes
 
 ### 2.6.0
+
+#### Security
+
+- The `hook` program: **every folder above it up to the root** is checked (owned by root or the server's user, not writable by group or others; a sticky folder of root like `/tmp` may be shared, the folder that holds the program may not), the resolved path is the one that is started, and the provider is **refused on Windows** until permissions can be checked there. (Review of 2026-11-24.)
+- The `rfc2136` **key file** must be mode 600 or 400 and owned by root or the user of this server, or the provider refuses to start (before any connection); on Windows the key file is not supported, the environment variable is. (The Cloudflare token file is unchanged: a stricter rule there would break running installations.)
 
 #### New
 

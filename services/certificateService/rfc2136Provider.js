@@ -229,8 +229,30 @@ function exchange({ host, port, message, timeout, connect = net.connect }) {
     });
 }
 
-function readSecret({ secret, secretFile }) {
-    const value = secret || (secretFile ? fs.readFileSync(secretFile, 'utf8').split(/\r?\n/)[0] : '');
+// The key file of the secret: refused unless only root or the user of this server can read it (a key that others can read lets them change
+// the DNS records the key is allowed to change). The path is resolved (symlinks followed) and the real file is checked and read.
+// Windows: file permissions are ACLs, which are not read here: use FREYA_ACME_RFC2136_KEY_SECRET (the environment) there.
+function readKeyFile(file, { fsApi = fs, uid = process.getuid ? process.getuid() : null, platform = process.platform } = {}) {
+    if (platform === 'win32') {
+        throw new Error('A key file is not supported on Windows (its permissions cannot be checked): set FREYA_ACME_RFC2136_KEY_SECRET instead.');
+    }
+    let real;
+    try {
+        real = fsApi.realpathSync(file);
+    } catch {
+        throw new Error('FREYA_ACME_RFC2136_KEY_FILE does not exist');
+    }
+    const info = fsApi.statSync(real);
+    if (!info.isFile()) throw new Error('FREYA_ACME_RFC2136_KEY_FILE must be a regular file');
+    if (info.mode & 0o077) {
+        throw new Error('The key file can be read or changed by group or others: chmod 600 it (the key lets anybody who reads it change the DNS records it is allowed to change).');
+    }
+    if (info.uid !== 0 && info.uid !== uid) throw new Error('The key file belongs to another user than root or the user of this server');
+    return fsApi.readFileSync(real, 'utf8').split(/\r?\n/)[0];
+}
+
+function readSecret({ secret, secretFile, ...checks }) {
+    const value = secret || (secretFile ? readKeyFile(secretFile, checks) : '');
     const clean = String(value).trim();
     if (!clean) {
         throw new Error('The rfc2136 provider needs the TSIG key secret: set FREYA_ACME_RFC2136_KEY_SECRET, or FREYA_ACME_RFC2136_KEY_FILE (a file whose first line is the base64 secret).');

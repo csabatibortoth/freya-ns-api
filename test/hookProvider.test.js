@@ -135,3 +135,87 @@ test('a program that cannot be started is reported without the arguments', { ski
         await assert.rejects(createProvider({ program: s.file }).create(NAME, VALUE), (err) => { assert.match(err.message, /could not be started|exit code/); assert.ok(!err.message.includes(VALUE)); return true; });
     } finally { s.cleanup(); }
 });
+
+// ---- Gordon's review 2026-11-24: every folder above the hook, Windows, the resolved path ----
+function tree(parentMode) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'freya anc '));
+    fs.chmodSync(root, 0o755);
+    const up = path.join(root, 'up');
+    const mid = path.join(up, 'mid');
+    fs.mkdirSync(mid, { recursive: true });
+    fs.chmodSync(up, parentMode);
+    fs.chmodSync(mid, 0o755);
+    const file = path.join(mid, 'hook.sh');
+    fs.writeFileSync(file, '#!/bin/sh\nexit 0\n');
+    fs.chmodSync(file, 0o755);
+    return { root, up, mid, file, cleanup: () => { fs.chmodSync(up, 0o755); fs.rmSync(root, { recursive: true, force: true }); } };
+}
+
+test('a folder ABOVE the protected folder that group or others can write is refused (they could swap the folder below it)', { skip: !unix }, async () => {
+    for (const mode of [0o775, 0o777, 0o757, 0o722]) {
+        const t = tree(mode);
+        try {
+            assert.throws(() => createProvider({ program: t.file }), /above the hook, is writable by group or others/, mode.toString(8));
+        } finally { t.cleanup(); }
+    }
+    const ok = tree(0o755);
+    try { assert.doesNotThrow(() => createProvider({ program: ok.file })); } finally { ok.cleanup(); }
+});
+
+test('a rejected hook is never started, also when only a folder above it is writable', { skip: !unix }, async () => {
+    const t = tree(0o755);
+    const marker = path.join(t.mid, 'ran.txt');
+    fs.writeFileSync(t.file, `#!/bin/sh\necho ran > "${marker}"\n`);
+    try {
+        const provider = createProvider({ program: t.file });
+        fs.chmodSync(t.up, 0o777); // changed after the start
+        await assert.rejects(provider.create(NAME, VALUE), /above the hook, is writable/);
+        assert.ok(!fs.existsSync(marker), 'the hook must not have run');
+        fs.chmodSync(t.up, 0o755);
+        await provider.create(NAME, VALUE);
+        assert.ok(fs.existsSync(marker));
+    } finally { t.cleanup(); }
+});
+
+test('a sticky folder of root (like /tmp) above the hook is fine, a sticky folder of somebody else is not, an owner other than root or the server is not', { skip: !unix }, () => {
+    const t = tree(0o755);
+    const view = (overrides) => ({
+        ...fs, realpathSync: fs.realpathSync, accessSync: fs.accessSync,
+        statSync: (p) => { const stat = fs.statSync(p); const o = overrides(p); return o ? new Proxy(stat, { get: (target, key) => (key in o ? o[key] : typeof target[key] === 'function' ? target[key].bind(target) : target[key]) }) : stat; },
+    });
+    try {
+        const own = process.getuid();
+        // /tmp-like: world writable, sticky, root
+        assert.doesNotThrow(() => checkProgram(t.file, { fsApi: view((p) => (p === t.up ? { mode: 0o41777, uid: 0 } : null)), uid: own }));
+        // the same folder, owned by another user: refused
+        assert.throws(() => checkProgram(t.file, { fsApi: view((p) => (p === t.up ? { mode: 0o41777, uid: 4242 } : null)), uid: own }), /above the hook/);
+        // sticky and world writable but owned by the server's own user (not root): refused, only root's shared folders count
+        assert.throws(() => checkProgram(t.file, { fsApi: view((p) => (p === t.up ? { mode: 0o41777, uid: own } : null)), uid: own }), /above the hook, is writable by group or others/);
+        // not sticky: refused
+        assert.throws(() => checkProgram(t.file, { fsApi: view((p) => (p === t.up ? { mode: 0o40777, uid: 0 } : null)), uid: own }), /above the hook/);
+        // the folder right above the file may not be shared, sticky or not
+        assert.throws(() => checkProgram(t.file, { fsApi: view((p) => (p === t.mid ? { mode: 0o41777, uid: 0 } : null)), uid: own }), /writable by group or others/);
+        // a folder of another user somewhere above, not writable: still refused
+        assert.throws(() => checkProgram(t.file, { fsApi: view((p) => (p === t.root ? { uid: 4242 } : null)), uid: own }), /belongs to another user/);
+    } finally { t.cleanup(); }
+});
+
+test('Windows: the hook provider is refused (no ACL check yet), whatever the path', () => {
+    for (const program of ['C:\\hooks\\acme.cmd', '/usr/bin/true', '']) {
+        assert.throws(() => checkProgram(program || '/x', { platform: 'win32' }), /not available on Windows/);
+    }
+    assert.throws(() => createProvider({ program: '/usr/bin/true', platform: 'win32' }), /not available on Windows/);
+});
+
+test('the program that is started is the resolved path, not the symlink that was configured', { skip: !unix }, async () => {
+    const t = tree(0o755);
+    const link = path.join(t.root, 'link.sh');
+    fs.symlinkSync(t.file, link);
+    let started;
+    try {
+        const provider = createProvider({ program: link, execFileImpl: (program, args, options, done) => { started = program; done(null, '', ''); } });
+        await provider.create(NAME, VALUE);
+        assert.equal(started, fs.realpathSync(t.file));
+        assert.notEqual(started, link);
+    } finally { t.cleanup(); }
+});

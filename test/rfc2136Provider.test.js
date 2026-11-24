@@ -242,3 +242,65 @@ test('the reader refuses name loops and cut-off data', () => {
     assert.throws(() => rfc.parseMessage(loop), /loops|cut off/);
     assert.throws(() => rfc.parseMessage(Buffer.alloc(5)), /too short/);
 });
+
+// ---- Gordon's review 2026-11-24: the permissions of the key file ----
+const unixOnly = process.platform === 'win32';
+function keyFile(mode, content = `${SECRET_B64}\n`) {
+    const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'freya-key-'));
+    const file = path.join(dir, 'acme.key');
+    fs.writeFileSync(file, content);
+    fs.chmodSync(file, mode);
+    return { dir, file, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+const withFile = (file) => ({ ...OPTIONS, secret: undefined, secretFile: file, server: '127.0.0.1:1' });
+
+test('a key file that group or others can read or change is refused before any connection', { skip: unixOnly }, async () => {
+    for (const mode of [0o644, 0o640, 0o660, 0o666, 0o604, 0o602, 0o622]) {
+        const k = keyFile(mode);
+        try {
+            assert.throws(() => rfc.createProvider(withFile(k.file)), (err) => {
+                assert.match(err.message, /read or changed by group or others/, mode.toString(8));
+                assert.ok(!err.message.includes(SECRET_B64), 'the secret is not in the message');
+                return true;
+            });
+        } finally { k.cleanup(); }
+    }
+    const ok = keyFile(0o600);
+    try { assert.doesNotThrow(() => rfc.createProvider(withFile(ok.file))); } finally { ok.cleanup(); }
+    const ro = keyFile(0o400);
+    try { assert.doesNotThrow(() => rfc.createProvider(withFile(ro.file))); } finally { ro.cleanup(); }
+});
+
+test('no network is touched when the key file is refused', { skip: unixOnly }, async () => {
+    const k = keyFile(0o644);
+    let connected = 0;
+    try {
+        assert.throws(() => rfc.createProvider({ ...withFile(k.file), connect: () => { connected++; throw new Error('no'); } }), /group or others/);
+        assert.equal(connected, 0);
+    } finally { k.cleanup(); }
+});
+
+test('a symlink to the key file is followed and the REAL file is checked', { skip: unixOnly }, () => {
+    const open = keyFile(0o644);
+    const private_ = keyFile(0o600);
+    const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'freya-link-'));
+    try {
+        fs.symlinkSync(open.file, path.join(dir, 'to-open'));
+        fs.symlinkSync(private_.file, path.join(dir, 'to-private'));
+        assert.throws(() => rfc.createProvider(withFile(path.join(dir, 'to-open'))), /group or others/);
+        assert.doesNotThrow(() => rfc.createProvider(withFile(path.join(dir, 'to-private'))));
+    } finally { open.cleanup(); private_.cleanup(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a key file of another user, a folder, a missing file are refused; Windows says to use the environment', { skip: unixOnly }, () => {
+    const k = keyFile(0o600);
+    try {
+        const view = { ...fs, statSync: (p) => new Proxy(fs.statSync(p), { get: (t, key) => (key === 'uid' ? 4242 : typeof t[key] === 'function' ? t[key].bind(t) : t[key]) }) };
+        assert.throws(() => rfc.createProvider({ ...withFile(k.file), fsApi: view }), /another user/);
+        assert.throws(() => rfc.createProvider(withFile(k.dir)), /regular file/);
+        assert.throws(() => rfc.createProvider(withFile(path.join(k.dir, 'nothing'))), /does not exist/);
+        assert.throws(() => rfc.createProvider({ ...withFile(k.file), platform: 'win32' }), /not supported on Windows.*FREYA_ACME_RFC2136_KEY_SECRET/);
+        // the environment variable still works everywhere
+        assert.doesNotThrow(() => rfc.createProvider({ ...OPTIONS, server: '127.0.0.1:1', platform: 'win32' }));
+    } finally { k.cleanup(); }
+});
