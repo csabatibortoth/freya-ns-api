@@ -6,10 +6,20 @@ const zones = require('./zonesProvider');
 const config = require('../../config/config');
 const cloudflare = require('./cloudflareProvider');
 const delegation = require('./delegationProvider');
+const rfc2136 = require('./rfc2136Provider');
 
 const FACTORIES = {
     zones: zones.provider,
     delegation: () => delegation.createProvider({ zone: config.acmeDelegationZone, inner: zones.provider() }),
+    rfc2136: () =>
+        rfc2136.createProvider({
+            server: config.acmeRfc2136Server,
+            zone: config.acmeRfc2136Zone,
+            keyName: config.acmeRfc2136KeyName,
+            algorithm: config.acmeRfc2136KeyAlgorithm,
+            secret: config.acmeRfc2136KeySecret,
+            secretFile: config.acmeRfc2136KeyFile,
+        }),
     cloudflare: () =>
         cloudflare.createProvider({
             token: config.acmeCloudflareToken,
