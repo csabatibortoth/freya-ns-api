@@ -1,6 +1,6 @@
 # freya-ns-api
 
-Management API for the Freya DNS server, version 2.6.0. It is the administrative
+Management API for the Freya DNS server, version 2.6.1. It is the administrative
 side of the name server: the place where the people who run it are managed,
 where the zones and records it serves and the domains it blocks are managed, and
 where what it did can be looked up.
@@ -1050,6 +1050,12 @@ download that fails is written to the error log.
 | `model/mongoDB/` | Database connection and data models |
 
 ## Release notes
+
+### 2.6.1
+
+#### Fixed
+
+- The copy of the dependencies that is kept in the repository had files of mongoose under names with the wrong letter case: a fresh clone on Linux could not load mongoose. The published npm package was not affected (it carries no dependencies).
 
 ### 2.6.0
 
